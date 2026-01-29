@@ -22,20 +22,34 @@ void perFunction(Function &F) {
   errs() << "Instruction Count: " << F.getInstructionCount() << "\n";
   if (inst_count > 0) {
 
-    const auto map = std::map<std::string, std::vector<Instruction &>>{};
+    auto map =
+        std::map<std::string,
+                 std::vector<SmallVector<std::pair<unsigned int, MDNode *>>>>{};
 
     errs() << "Instructions:\n";
     for (auto &inst : F.getEntryBlock().instructionsWithoutDebug()) {
       std::string opcode_name = std::string{inst.getOpcodeName()};
-      errs() << "  " << opcode_name << ": " << inst << "\n";
+      auto count = map.count(opcode_name);
+      SmallVector<std::pair<unsigned int, MDNode *>> MDs;
+      inst.getAllMetadata(MDs);
+      if (count == 0) {
+        map[opcode_name] = {MDs};
+      } else {
+        map[opcode_name].push_back(MDs);
+      }
+      // errs() << "  " << opcode_name << ": " << inst << "\n";
+    }
+
+    for (auto &entry : map) {
+      errs() << " " << entry.first << ": " << entry.second.size() << "\n";
     }
   }
   const auto arg_count = F.arg_size();
   errs() << "Arg Count: " << arg_count << "\n";
   if (arg_count > 0) {
-    errs() << "Args: \n";
+    errs() << "Args:";
     for (auto &arg : F.args()) {
-      errs() << "\t" << arg << " ";
+      errs() << " " << arg;
     }
     errs() << "\n";
   }
