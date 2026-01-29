@@ -1,7 +1,7 @@
 #include "llvm/Demangle/Demangle.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Plugins/PassPlugin.h"
+#include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/raw_ostream.h"
 #include <map>
 #include <vector>
@@ -27,17 +27,19 @@ void perFunction(Function &F) {
                  std::vector<SmallVector<std::pair<unsigned int, MDNode *>>>>{};
 
     errs() << "Instructions:\n";
-    for (auto &inst : F.getEntryBlock().instructionsWithoutDebug()) {
-      std::string opcode_name = std::string{inst.getOpcodeName()};
-      auto count = map.count(opcode_name);
-      SmallVector<std::pair<unsigned int, MDNode *>> MDs;
-      inst.getAllMetadata(MDs);
-      if (count == 0) {
-        map[opcode_name] = {MDs};
-      } else {
-        map[opcode_name].push_back(MDs);
+    for (auto &bb : F) {
+      for (auto &inst : bb) {
+        std::string opcode_name = std::string{inst.getOpcodeName()};
+        auto count = map.count(opcode_name);
+        SmallVector<std::pair<unsigned int, MDNode *>> MDs;
+        inst.getAllMetadata(MDs);
+        if (count == 0) {
+          map[opcode_name] = {MDs};
+        } else {
+          map[opcode_name].push_back(MDs);
+        }
+        // errs() << "  " << opcode_name << ": " << inst << "\n";
       }
-      // errs() << "  " << opcode_name << ": " << inst << "\n";
     }
 
     for (auto &entry : map) {
