@@ -3,6 +3,8 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/raw_ostream.h"
+#include <llvm/IR/PassManager.h>
+#include <llvm/Passes/OptimizationLevel.h>
 #include <map>
 #include <vector>
 
@@ -64,8 +66,8 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
 
     return PreservedAnalyses::all();
   }
-
-  static bool isRequired() { return true; }
+  //
+  // static bool isRequired() { return true; }
 };
 
 void registerPassBuilderCallbacks(PassBuilder &PB) {
@@ -77,6 +79,13 @@ void registerPassBuilderCallbacks(PassBuilder &PB) {
           return true;
         }
         return false;
+      });
+  PB.registerPipelineStartEPCallback(
+      [](ModulePassManager &MPM, OptimizationLevel Level) {
+        FunctionPassManager FPM;
+        FPM.addPass(InstructionCount());
+
+        MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });
 }
 
