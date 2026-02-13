@@ -3,32 +3,30 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cstddef>
+#include <fstream>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Passes/OptimizationLevel.h>
 #include <map>
+#include <sstream>
 #include <vector>
 
 using namespace llvm;
 
 namespace {
 
-void perFunction(Function &F) {
-  const auto name = F.getName();
-  errs() << "Function: " << name << "\n";
-  const auto demangled_name = demangle(name);
-  if (name != demangled_name) {
-    errs() << "Demangled Name: " << demangled_name << "\n";
-  }
+std::map<std::string, std::size_t> getInstructionCounts(Function &F) {
 
-  const auto inst_count = F.getInstructionCount();
-  errs() << "Instruction Count: " << F.getInstructionCount() << "\n";
-  if (inst_count > 0) {
+  std::string output{};
+  raw_string_ostream ostream{output};
 
-    auto map =
-        std::map<std::string,
-                 std::vector<SmallVector<std::pair<unsigned int, MDNode *>>>>{};
+  auto map =
+      std::map<std::string,
+               std::vector<SmallVector<std::pair<unsigned int, MDNode *>>>>{};
+  std::map<std::string, std::size_t> inst_counts{};
 
-    errs() << "Instructions:\n";
+  if (F.getInstructionCount() > 0) {
+    // ostream << "Instructions:\n";
     for (auto &bb : F) {
       for (auto &inst : bb) {
         std::string opcode_name = std::string{inst.getOpcodeName()};
@@ -39,34 +37,78 @@ void perFunction(Function &F) {
           map[opcode_name] = {MDs};
         } else {
           map[opcode_name].push_back(MDs);
+          inst_counts[opcode_name] = map[opcode_name].size();
         }
-        // errs() << "  " << opcode_name << ": " << inst << "\n";
+        // oss << "  " << opcode_name << ": " << inst << "\n";
       }
     }
 
-    for (auto &entry : map) {
-      errs() << " " << entry.first << ": " << entry.second.size() << "\n";
-    }
+    // for (auto &entry : instruction_map) {
+    //   ostream << " " << entry.first << ": " << entry.second.size() << "\n";
+    // }
   }
-  const auto arg_count = F.arg_size();
-  errs() << "Arg Count: " << arg_count << "\n";
-  if (arg_count > 0) {
-    errs() << "Args:";
-    for (auto &arg : F.args()) {
-      errs() << " " << arg;
-    }
-    errs() << "\n";
-  }
-  errs() << "\n";
+
+  return inst_counts;
 }
 
 struct InstructionCount : PassInfoMixin<InstructionCount> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
-    perFunction(F);
+    getInstructionCounts(F);
+
+    errs() << "-- Function Pass!" << "\n";
+    return PreservedAnalyses::all();
+  }
+
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
+
+    std::ofstream file{};
+
+    std::string output_str{};
+    raw_string_ostream ostream{output_str};
+
+    std::vector<std::string> insts_to_record{
+        "alloca", "load", "store", "getelementptr", "call", "mul", "add",
+    };
+
+    ostream << "Function Name, Demangled Name";
+    for (auto &inst : insts_to_record) {
+      ostream << "," << inst;
+    }
+    ostream << "\n";
+
+    for (auto &F : M) {
+      // Name
+      const auto name = F.getName();
+      ostream << name;
+      const auto demangled_name = demangle(name);
+      // if (name != demangled_name) {
+      ostream << ",\"" << demangled_name << "\"";
+      // }
+      // Args
+      // if (F.arg_size() > 0) {
+      //   ostream << "Args:";
+      //   for (auto &arg : F.args()) {
+      //     ostream << " " << arg;
+      //   }
+      // }
+
+      // Instructions
+      std::map<std::string, std::size_t> instruction_counts =
+          getInstructionCounts(F);
+
+      for (auto &inst : insts_to_record) {
+        ostream << "," << instruction_counts[inst];
+      }
+      ostream << "\n";
+    }
+
+    file.open("./output.csv");
+    file << output_str << "\n";
+    file.close();
 
     return PreservedAnalyses::all();
   }
-  //
+
   // static bool isRequired() { return true; }
 };
 
@@ -82,10 +124,11 @@ void registerPassBuilderCallbacks(PassBuilder &PB) {
       });
   PB.registerPipelineStartEPCallback(
       [](ModulePassManager &MPM, OptimizationLevel Level) {
-        FunctionPassManager FPM;
-        FPM.addPass(InstructionCount());
+        // FunctionPassManager FPM;
+        // FPM.addPass(InstructionCount());
 
-        MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
+        MPM.addPass(InstructionCount());
+        // MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });
 }
 
