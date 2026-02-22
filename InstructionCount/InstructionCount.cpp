@@ -72,10 +72,12 @@ struct InstructionCountModuleAnalysis
           called_F = cast<InvokeInst>(inst).getCalledFunction();
         }
         if (called_F != nullptr) {
-          if (!called_F->isDeclaration()) {
-            // errs() << "Following function call to "
-            //        << demangle(called_F->getName()) << " from function "
-            //        << demangle(F.getName()) << "\n";
+          if (called_F == &F) {
+            errs() << "A function is trying is calling itself recursively! "
+                      "Results will be wrong.\n";
+          } else if (!called_F->isDeclaration()) {
+            // errs() << "Following function call to " << called_F->getName()
+            //        << " from function " << F.getName() << "\n";
             auto called_inst_counts =
                 FAM.getResult<InstructionCountModuleAnalysis>(*called_F)
                     .instruction_counts;
@@ -133,6 +135,7 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
 
+    // errs() << "Running analysis for Module " << M.getName() << "\n";
     std::ofstream file{};
 
     std::string output_str{};
@@ -153,6 +156,7 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     ostream << "\n";
 
     for (auto &F : M) {
+      // errs() << F.getName() << "\n";
       if (F.isDeclaration())
         continue;
 
@@ -200,8 +204,10 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       // }
 
       // Instructions
+      // errs() << "Getting Instruction counts" << "\n";
       auto &function_inst_count =
           FAM.getResult<InstructionCountModuleAnalysis>(F);
+      // errs() << "Got Instruction counts" << "\n";
 
       for (auto &inst : insts_to_record) {
         if (function_inst_count.instruction_counts.count(inst)) {
@@ -221,9 +227,11 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       ostream << "\n";
     }
 
+    // errs() << "opening file\n";
     file.open("./output.csv");
     file << output_str << "\n";
     file.close();
+    // errs() << "closed file\n";
 
     return PreservedAnalyses::all();
   }
