@@ -5,61 +5,133 @@
 #include "llvm/Support/raw_ostream.h"
 #include <cstddef>
 #include <fstream>
+#include <llvm/Analysis/ScalarEvolution.h>
+#include <llvm/IR/Analysis.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Passes/OptimizationLevel.h>
 #include <map>
-#include <sstream>
 #include <vector>
 
 using namespace llvm;
 
 namespace {
+const std::map<std::string, std::size_t> energy_model{
+    {"alloca", 3}, {"load", 6}, {"mul", 10},
+    {"fmul", 15},  {"add", 2},  {"fadd", 5}};
 
-std::map<std::string, std::size_t> getInstructionCounts(Function &F) {
+struct FunctionInstructionCount {
+  const Function *F;
+  std::map<std::string, std::size_t> instruction_counts{};
+  std::map<std::string, std::size_t> energy_per_instruction_type{};
 
-  std::string output{};
-  raw_string_ostream ostream{output};
+  std::size_t get_total_energy_consumption() {
+    std::size_t sum{};
+    for (auto &p : energy_per_instruction_type) {
+      sum += p.second;
+    }
+    return sum;
+  }
+};
 
-  auto map =
-      std::map<std::string,
-               std::vector<SmallVector<std::pair<unsigned int, MDNode *>>>>{};
-  std::map<std::string, std::size_t> inst_counts{};
+struct InstructionCountModuleAnalysis
+    : public AnalysisInfoMixin<InstructionCountModuleAnalysis> {
+  using Result = FunctionInstructionCount;
 
-  if (F.getInstructionCount() > 0) {
+  Result run(Function &F, FunctionAnalysisManager &FAM) {
+    Result result;
+    result.F = &F;
+    result.instruction_counts = getInstructionCounts(F, FAM);
+    for (auto &[k, _] : energy_model) {
+      result.energy_per_instruction_type[k] =
+          (result.instruction_counts.count(k) ? result.instruction_counts[k]
+                                              : 0) *
+          energy_model.at(k);
+    }
+    return result;
+  }
+  static AnalysisKey Key;
+
+  std::map<std::string, std::size_t>
+  getInstructionCounts(Function &F, FunctionAnalysisManager &FAM) {
+
+    std::string output{};
+    raw_string_ostream ostream{output};
+
+    std::map<std::string, std::size_t> inst_counts{};
+
+    // errs() << "Counting function " << demangle(F.getName()) << "\n";
+
     // ostream << "Instructions:\n";
     for (auto &bb : F) {
       for (auto &inst : bb) {
         std::string opcode_name = std::string{inst.getOpcodeName()};
-        auto count = map.count(opcode_name);
-        SmallVector<std::pair<unsigned int, MDNode *>> MDs;
-        inst.getAllMetadata(MDs);
-        if (count == 0) {
-          map[opcode_name] = {MDs};
+        Function *called_F = nullptr;
+        if (isa<CallInst>(inst)) {
+          called_F = cast<CallInst>(inst).getCalledFunction();
+        } else if (isa<InvokeInst>(inst)) {
+          called_F = cast<InvokeInst>(inst).getCalledFunction();
+        }
+        if (called_F != nullptr) {
+          if (!called_F->isDeclaration()) {
+            // errs() << "Following function call to "
+            //        << demangle(called_F->getName()) << " from function "
+            //        << demangle(F.getName()) << "\n";
+            auto called_inst_counts =
+                FAM.getResult<InstructionCountModuleAnalysis>(*called_F)
+                    .instruction_counts;
+            // errs() << "Finished function call to "
+            //        << demangle(called_F->getName()) << " from function "
+            //        << demangle(F.getName()) << "\n";
+            for (auto &[k, v] : called_inst_counts) {
+              if (inst_counts.count(k)) {
+                // auto prev = inst_counts.at(k);
+                inst_counts[k] += v;
+                // errs() << "added " << v << " to " << k << ". Count was " <<
+                // prev
+                //        << ". Count is at: " << inst_counts.at(k) << "\n";
+              } else {
+                inst_counts[k] = v;
+                // errs() << "added " << v << " to " << k
+                //        << ". Count is at: " << inst_counts.at(k) << "\n";
+              }
+            }
+          }
+        }
+
+        if (inst_counts.count(opcode_name)) {
+          // unsigned long prev = inst_counts.at(opcode_name);
+          inst_counts[opcode_name]++;
+          // errs() << "added 1 to " << opcode_name << ". Count was " << prev
+          //        << ". Count is at: " << inst_counts.at(opcode_name) << "\n";
         } else {
-          map[opcode_name].push_back(MDs);
-          inst_counts[opcode_name] = map[opcode_name].size();
+          inst_counts[opcode_name] = 1;
+          // errs() << "added 1 to " << opcode_name
+          //        << ". Count is at: " << inst_counts.at(opcode_name) << "\n";
         }
         // oss << "  " << opcode_name << ": " << inst << "\n";
       }
+
+      // for (auto &entry : instruction_map) {
+      //   ostream << " " << entry.first << ": " << entry.second.size() << "\n";
+      // }
     }
 
-    // for (auto &entry : instruction_map) {
-    //   ostream << " " << entry.first << ": " << entry.second.size() << "\n";
-    // }
+    return inst_counts;
   }
+};
 
-  return inst_counts;
-}
+AnalysisKey InstructionCountModuleAnalysis::Key;
 
 struct InstructionCount : PassInfoMixin<InstructionCount> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
-    getInstructionCounts(F);
+    // getInstructionCounts(F);
 
     errs() << "-- Function Pass!" << "\n";
+    errs() << "This pass currently does nothing" << "\n";
     return PreservedAnalyses::all();
   }
 
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
 
     std::ofstream file{};
 
@@ -67,8 +139,12 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     raw_string_ostream ostream{output_str};
 
     std::vector<std::string> insts_to_record{
-        "alloca", "load", "store", "getelementptr", "call", "mul", "add",
+        "alloca", "load", "store", "getelementptr", "call",
+        "mul",    "add",  "fmul",  "fadd",
     };
+
+    FunctionAnalysisManager &FAM =
+        MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
 
     ostream << "Function Name, Demangled Name";
     for (auto &inst : insts_to_record) {
@@ -77,6 +153,37 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     ostream << "\n";
 
     for (auto &F : M) {
+      if (F.isDeclaration())
+        continue;
+
+      // LoopInfo &LI = FAM.getResult<LoopAnalysis>(F);
+      //
+      // if (!LI.empty()) {
+      //   ScalarEvolution &SE = FAM.getResult<ScalarEvolutionAnalysis>(F);
+      //
+      //   errs() << "For Function " << F.getName() << "\n";
+      //   errs() << "Loops:\n";
+      //   for (auto &L : LI) {
+      //     errs() << L->getName() << "\n";
+      //     errs() << "Is rotated: " << (L->isRotatedForm() ? "true" : "false")
+      //            << "\n";
+      //     if (auto bounds = L->getBounds(SE)) {
+      //       errs() << "Initial Value: " << bounds->getInitialIVValue() <<
+      //       "\n"; errs() << "Step Value: " << bounds->getStepValue() << "\n";
+      //       errs() << "Final Value: " << bounds->getFinalIVValue() << "\n";
+      //       errs() << "Direction "
+      //              << (bounds->getDirection() ==
+      //                          Loop::LoopBounds::Direction::Increasing
+      //                      ? "Increasing"
+      //                      : "Decreasing")
+      //              << "\n";
+      //     } else {
+      //       errs() << "Could not determine loop bounds\n";
+      //     }
+      //   }
+      //   errs() << "Loops end\n";
+      // }
+
       // Name
       const auto name = F.getName();
       ostream << name;
@@ -93,11 +200,23 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       // }
 
       // Instructions
-      std::map<std::string, std::size_t> instruction_counts =
-          getInstructionCounts(F);
+      auto &function_inst_count =
+          FAM.getResult<InstructionCountModuleAnalysis>(F);
 
       for (auto &inst : insts_to_record) {
-        ostream << "," << instruction_counts[inst];
+        if (function_inst_count.instruction_counts.count(inst)) {
+
+          ostream << ",(" << function_inst_count.instruction_counts.at(inst)
+                  << ":";
+          if (function_inst_count.energy_per_instruction_type.count(inst)) {
+            ostream << function_inst_count.energy_per_instruction_type.at(inst)
+                    << ")";
+          } else {
+            ostream << "0)";
+          }
+        } else {
+          ostream << ",(0:0)";
+        }
       }
       ostream << "\n";
     }
@@ -113,6 +232,9 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
 };
 
 void registerPassBuilderCallbacks(PassBuilder &PB) {
+  PB.registerAnalysisRegistrationCallback([](FunctionAnalysisManager &FAM) {
+    FAM.registerPass([&] { return InstructionCountModuleAnalysis(); });
+  });
   PB.registerPipelineParsingCallback(
       [](StringRef Name, llvm::FunctionPassManager &FPM,
          ArrayRef<llvm::PassBuilder::PipelineElement>) {
