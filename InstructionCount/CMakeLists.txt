@@ -15,7 +15,7 @@ list(APPEND CMAKE_PREFIX_PATH "${LLVM_INSTALL_DIR}/lib/cmake/llvm/")
 
 find_package(LLVM CONFIG)
 if("${LLVM_VERSION_MAJOR}" VERSION_LESS 20)
-    message(FATAL_ERROR "Found LLVM ${LLVM_VERSION_MAJOR}, but need LLVM 20 or above")
+  message(FATAL_ERROR "Found LLVM ${LLVM_VERSION_MAJOR}, but need LLVM 20 or above")
 endif()
 
 # HelloWorld includes headers from LLVM - update the include paths accordingly
@@ -29,13 +29,13 @@ set(CMAKE_CXX_STANDARD 17 CACHE STRING "")
 
 # LLVM is normally built without RTTI. Be consistent with that.
 if(NOT LLVM_ENABLE_RTTI)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti -g")
 endif()
 
 #===============================================================================
 # 3. ADD THE TARGET
 #===============================================================================
-add_library(InstructionCount SHARED InstructionCount.cpp)
+add_library(InstructionCount SHARED InstructionCount.cpp CostRelation.cpp)
 
 # Allow undefined symbols in shared objects on Darwin (this is the default
 # behaviour on Linux)

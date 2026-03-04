@@ -1,3 +1,4 @@
+#include "CostRelation.hpp"
 #include "llvm/Demangle/Demangle.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -12,116 +13,14 @@
 #include <llvm/IR/Instruction.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Passes/OptimizationLevel.h>
+#include <llvm/Support/CommandLine.h>
 #include <map>
 #include <sstream>
 #include <vector>
 
 using namespace llvm;
 
-namespace {
-
-struct CostRelation {
-  // no specific reason for bool, I just need to store wether a variable exists
-  // or not
-  static std::vector<bool> variables;
-  std::vector<CostRelation> sub_relations{};
-  std::size_t factor = 0;
-  std::size_t var_index = 0; // var index 0 means the factor is used like a
-                             // constant, i.e. the var is 1
-  //
-
-  CostRelation(const CostRelation &other)
-      : sub_relations{other.sub_relations}, factor{other.factor},
-        var_index{other.var_index} {}
-
-  CostRelation() : sub_relations{}, factor{}, var_index{} {}
-
-  CostRelation operator+(CostRelation &other) {
-    CostRelation new_cr{};
-    new_cr.factor = 1;
-    CostRelation to_add{*this};
-    if (to_add.var_index != other.var_index) {
-      new_cr.sub_relations.push_back(std::move(to_add));
-      new_cr.sub_relations.push_back(other);
-    } else {
-
-      to_add.factor += other.factor;
-      to_add.sub_relations.insert(to_add.sub_relations.end(),
-                                  other.sub_relations.begin(),
-                                  other.sub_relations.end());
-      return to_add;
-    }
-    return new_cr;
-  }
-  std::string toString() const;
-
-  std::string getVariableAsString() const {
-    std::stringstream ss{};
-    if (var_index != 0) {
-      ss << "n" << (var_index - 1);
-    }
-    return ss.str();
-  }
-};
-
-std::ostream &operator<<(std::ostream &os, const CostRelation &cr) {
-  os << cr.factor;
-  if (cr.sub_relations.size() > 0) {
-    os << "*";
-    if (cr.sub_relations.size() == 1) {
-      os << cr.sub_relations[0];
-    } else {
-      os << "(";
-      for (int i{}; i < cr.sub_relations.size(); i++) {
-        os << cr.sub_relations[i];
-        if (i < cr.sub_relations.size() - 1) {
-          os << "+";
-        }
-      }
-      os << ")";
-    }
-  }
-  return os;
-}
-raw_ostream &operator<<(raw_ostream &os, const CostRelation &cr) {
-  os << cr.factor;
-  os << cr.getVariableAsString();
-  if (cr.sub_relations.size() > 0) {
-    os << "*";
-    if (cr.sub_relations.size() == 1) {
-      os << cr.sub_relations[0];
-    } else {
-      os << "(";
-      for (int i{}; i < cr.sub_relations.size(); i++) {
-        os << cr.sub_relations[i];
-        if (i < cr.sub_relations.size() - 1) {
-          os << "+";
-        }
-      }
-      os << ")";
-    }
-  }
-  return os;
-}
-std::string CostRelation::toString() const {
-  std::stringstream ss{};
-  ss << (*this);
-  return ss.str();
-}
-
-// special variable for constants. Only the index being 0 matters, the value has
-// no meaning
-std::vector<bool> CostRelation::variables{0};
-
-// this ensures that the subscript operator is not adding an entry to the map
-template <typename T>
-void addOrSetEntry(std::map<T, std::size_t> &map, T key, std::size_t value) {
-  if (map.count(key)) {
-    map[key] += value;
-  } else {
-    map[key] = value;
-  }
-}
+namespace EC {
 
 const std::map<std::string, std::size_t> energy_model{
     {"alloca", 3}, {"load", 6}, {"mul", 10},
@@ -130,11 +29,12 @@ const std::map<std::string, std::size_t> energy_model{
 struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
   struct Result {
     const Function *function;
-    std::map<std::string, std::size_t> instruction_counts{};
     std::map<std::string, std::size_t> energy_per_instruction_type{};
-    std::map<std::string, CostRelation> instruction_costs{};
-    std::vector<Function *> outgoing_calls{};
-    std::vector<Function *> outgoing_invokes{};
+    std::map<std::string, ExprHandle> instruction_costs{};
+    std::set<Function *> outgoing_calls{};
+    std::map<Function *, ExprHandle> outgoing_calls_costs{};
+    std::set<Function *> outgoing_invokes{};
+    std::map<Function *, ExprHandle> outgoing_invokes_costs{};
 
     std::size_t get_total_energy_consumption() {
       std::size_t sum{};
@@ -150,32 +50,34 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
     result.function = &F;
     getInstructionCounts(F, FAM, result);
 
-    for (auto &[k, _] : energy_model) {
-      result.energy_per_instruction_type[k] =
-          (result.instruction_counts.count(k) ? result.instruction_counts[k]
-                                              : 0) *
-          energy_model.at(k);
-    }
+    // for (auto &[k, _] : energy_model) {
+    //   result.energy_per_instruction_type[k] =
+    //       (result.instruction_counts.count(k) ? result.instruction_counts[k]
+    //                                           : 0) *
+    //       energy_model.at(k);
+    // }
 
     return result;
   }
   static AnalysisKey Key;
 
-  using BlockToLoop = std::map<BasicBlock *, Loop *>;
+  using BlockToLoops = std::map<BasicBlock *, std::vector<Loop *>>;
 
-  void assignLoopToBasicBlocks(BlockToLoop &BTL, Loop *loop) {
+  void assignLoopsToBasicBlocks(BlockToLoops &BTL, Loop *loop) {
     for (Loop *l_inner : *loop) {
-      assignLoopToBasicBlocks(BTL, l_inner);
+      assignLoopsToBasicBlocks(BTL, l_inner);
     }
     for (BasicBlock *BB : loop->getBlocks()) {
       if (BTL.count(BB) == 0) {
-        BTL[BB] = loop;
+        BTL[BB].push_back(loop);
       }
     }
   }
 
   void getInstructionCounts(Function &F, FunctionAnalysisManager &FAM,
                             Result &result) {
+    if (F.isDeclaration())
+      return;
     std::string output{};
     raw_string_ostream ostream{output};
 
@@ -183,80 +85,117 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
 
     // errs() << "Counting function " << demangle(F.getName()) << "\n";
 
-    // BlockToLoop BTL{};
+    BlockToLoops BTL{};
 
-    // LoopInfo &LI = FAM.getResult<LoopAnalysis>(F);
-    // for (Loop *loop : LI) {
-    //   CostRelation loop_cr{};
-    //   assignLoopToBasicBlocks(BTL, loop);
+    // errs() << "Creating the map\n";
+    std::map<Loop *, ExprHandle> loop_exprs{};
+    // errs() << "Created the map\n";
+
+    LoopInfo &LI = FAM.getResult<LoopAnalysis>(F);
+    for (Loop *loop : LI) {
+      assignLoopsToBasicBlocks(BTL, loop);
+    }
+
+    // assign variables to the loops
+    // errs() << "Assigning vars to the loops:\n";
+    for (Loop *loop : LI.getLoopsInPreorder()) {
+      ExprHandle loop_expr{var(Variable::latest_id++)};
+      // with this every loop gets its own variable, even those that actually
+      // share numbers of iteration
+      loop_exprs[loop] = std::move(loop_expr);
+      errs() << "Added " << loop_exprs[loop] << " to a loop\n";
+    }
+
+    // for (auto &[BB, loops] : BTL) {
+    //   for (auto &inst : *BB) {
+    //     std::string opcode_name = std::string{inst.getOpcodeName()};
+    //     CostRelation new_cr{1};
+    //     for (auto loop : loops) {
+    //       CostRelation old_cr{std::move(new_cr)};
+    //       new_cr = CostRelation{loop_crs[loop]};
+    //       new_cr.add_subrelation(old_cr);
+    //     }
+    //
+    //     // errs() << "Adding " << new_cr << " to "
+    //     //        << result.instruction_costs[opcode_name] << "\n";
+    //     result.instruction_costs[opcode_name] =
+    //         result.instruction_costs[opcode_name] + new_cr;
+    //     // errs() << "Equals: " << result.instruction_costs[opcode_name] <<
+    //     // "\n";
+    //   }
     // }
 
-    // ostream << "Instructions:\n";
-    for (auto &bb : F) {
-      for (auto &inst : bb) {
+    for (auto &BB : F) {
+      for (auto &inst : BB) {
         std::string opcode_name = std::string{inst.getOpcodeName()};
+        ExprHandle expr = constant(1);
+        if (BTL.count(&BB)) {
+          for (auto loop : BTL[&BB]) {
+            // CostRelation old_cr{std::move(new_cr)};
+            // new_cr = CostRelation{loop_crs[loop]};
+            // new_cr.add_subrelation(old_cr);
+            expr = reduce(mul(loop_exprs[loop], expr));
+          }
+        }
+        if (result.instruction_costs.count(opcode_name)) {
+          result.instruction_costs[opcode_name] =
+              reduce(add(result.instruction_costs[opcode_name], expr));
+
+        } else {
+          result.instruction_costs[opcode_name] = expr;
+        }
+
         Function *called_F = nullptr;
         if (isa<CallInst>(inst)) {
           called_F = cast<CallInst>(inst).getCalledFunction();
-          result.outgoing_calls.push_back(called_F);
+          result.outgoing_calls.emplace(called_F);
+
+          if (result.outgoing_calls_costs.count(called_F)) {
+            errs() << "Adding expr: " << expr << " to "
+                   << result.outgoing_calls_costs[called_F] << "\n";
+            result.outgoing_calls_costs[called_F] =
+                reduce(add(result.outgoing_calls_costs[called_F], expr));
+            errs() << "Now it's at: " << result.outgoing_invokes_costs[called_F]
+                   << "\n";
+          } else {
+            result.outgoing_calls_costs[called_F] = expr;
+          }
         } else if (isa<InvokeInst>(inst)) {
           called_F = cast<InvokeInst>(inst).getCalledFunction();
-          result.outgoing_invokes.push_back(called_F);
-        }
+          result.outgoing_invokes.emplace(called_F);
 
-        // for (Loop *loop : LI) {
-        //   CostRelation loop_cr{};
-        // for (BasicBlock *BB : loop->getBlocks()) {
-        //   for (Instruction &inst : *BB) {
-        //   }
-        // }
-        // }
-
-        // I can get the blocks of a function and of the loops in the function.
-        // So before handling a block normally I can just compare it to the loop
-        // blocks to check wether it needs special handling
-
-        /*
-        if (called_F != nullptr) {
-          if (called_F == &F) {
-            errs() << "A function is trying is calling itself recursively! "
-                      "Results will be wrong.\n";
-          } else if (!called_F->isDeclaration()) {
-            // errs() << "Following function call to " << called_F->getName()
-            //        << " from function " << F.getName() << "\n";
-            auto called_inst_counts =
-                FAM.getResult<InstructionCountModuleAnalysis>(*called_F)
-                    .instruction_counts;
-            // errs() << "Finished function call to "
-            //        << demangle(called_F->getName()) << " from function "
-            //        << demangle(F.getName()) << "\n";
-            for (auto &[k, v] : called_inst_counts) {
-              if (inst_counts.count(k)) {
-                // auto prev = inst_counts.at(k);
-                result.instruction_counts[k] += v;
-                // errs() << "added " << v << " to " << k << ". Count was "
-                <<
-                // prev
-                //        << ". Count is at: " << inst_counts.at(k) << "\n";
-              } else {
-                result.instruction_counts[k] = v;
-                // errs() << "added " << v << " to " << k
-                //        << ". Count is at: " << inst_counts.at(k) << "\n";
-              }
-            }
+          if (result.outgoing_invokes_costs.count(called_F)) {
+            errs() << "Adding expr: " << expr << " to "
+                   << result.outgoing_invokes_costs[called_F] << "\n";
+            result.outgoing_invokes_costs[called_F] =
+                reduce(add(result.outgoing_invokes_costs[called_F], expr));
+            errs() << "Now it's at: " << result.outgoing_invokes_costs[called_F]
+                   << "\n";
+          } else {
+            result.outgoing_invokes_costs[called_F] = expr;
           }
         }
-        */
-
-        addOrSetEntry(result.instruction_counts, opcode_name, 1);
-
-        result.instruction_costs[opcode_name].factor += 1;
       }
-
-      // for (auto &entry : instruction_map) {
-      //   ostream << " " << entry.first << ": " << entry.second.size() << "\n";
-      // }
     }
+
+    // ostream << "Instructions:\n";
+    // for (auto &bb : F) {
+    //   for (auto &inst : bb) {
+    //     std::string opcode_name = std::string{inst.getOpcodeName()};
+    //     Function *called_F = nullptr;
+    //     if (isa<CallInst>(inst)) {
+    //       called_F = cast<CallInst>(inst).getCalledFunction();
+    //       result.outgoing_calls.push_back(called_F);
+    //     } else if (isa<InvokeInst>(inst)) {
+    //       called_F = cast<InvokeInst>(inst).getCalledFunction();
+    //       result.outgoing_invokes.push_back(called_F);
+    //     }
+    //
+    //     addOrSetEntry(result.instruction_counts, opcode_name, 1);
+    //
+    //     // result.instruction_costs[opcode_name].value += 1;
+    //   }
+    // }
   }
 };
 
@@ -276,38 +215,62 @@ struct ECAccumulationFunctionAnalysis
     return *result_ptr;
   }
 
+  void doAccumulation(Result &prev_result, Result &called_result,
+                      ExprHandle call_expr) {
+    for (auto &[k, v] : called_result.instruction_costs) {
+      errs() << "For inst: " << k << " and its expr: " << v
+             << " from previous function\n";
+      if (prev_result.instruction_costs.count(k)) {
+        errs() << "Was already in this functions result with value: "
+               << prev_result.instruction_costs[k] << ". Modifying it.\n";
+        prev_result.instruction_costs[k] =
+            reduce(add(prev_result.instruction_costs[k], mul(call_expr, v)));
+      } else {
+        errs() << "Was not yet in this functions result. Adding it.\n";
+        prev_result.instruction_costs[k] = mul(call_expr, v);
+      }
+    }
+  }
+
   Result run(Function &F, FunctionAnalysisManager &FAM) {
+    errs() << "In ECAFA:\n";
     Result prev_result = getECFunctionAnalysisResult(&F, FAM);
 
     for (auto *called_F : prev_result.outgoing_calls) {
+      errs() << "For call to function " << called_F->getName() << ":\n";
       if (called_F == &F) {
         errs() << "Skipping a recursion at Function: " << called_F->getName()
                << "\n";
         continue;
       }
+      errs() << "Getting its results\n";
       Result called_F_result =
           FAM.getResult<ECAccumulationFunctionAnalysis>(*called_F);
-      for (auto &[k, v] : called_F_result.instruction_counts) {
-        prev_result.instruction_counts[k] += v;
-      }
+      errs() << "Got its results\n";
+      // for (auto &[k, v] : called_F_result.instruction_counts) {
+      //   prev_result.instruction_counts[k] += v;
+      // }
       for (auto &[k, v] : called_F_result.instruction_costs) {
-        prev_result.instruction_costs[k] = prev_result.instruction_costs[k] + v;
+        doAccumulation(prev_result, called_F_result,
+                       prev_result.outgoing_calls_costs[called_F]);
       }
     }
     for (auto *invoked_F : prev_result.outgoing_invokes) {
+      errs() << "For invoke to function " << invoked_F->getName() << ":\n";
       if (invoked_F == &F) {
         errs() << "Skipping a recursion at Function: " << invoked_F->getName()
                << "\n";
         continue;
       }
+      errs() << "Getting its results\n";
       Result invoked_F_result =
           FAM.getResult<ECAccumulationFunctionAnalysis>(*invoked_F);
-      for (auto &[k, v] : invoked_F_result.instruction_counts) {
-        prev_result.instruction_counts[k] += v;
-      }
-      for (auto &[k, v] : invoked_F_result.instruction_costs) {
-        prev_result.instruction_costs[k] = prev_result.instruction_costs[k] + v;
-      }
+      errs() << "Got its results\n";
+      // for (auto &[k, v] : invoked_F_result.instruction_counts) {
+      //   prev_result.instruction_counts[k] += v;
+      // }
+      doAccumulation(prev_result, invoked_F_result,
+                     prev_result.outgoing_invokes_costs[invoked_F]);
     }
 
     return prev_result;
@@ -360,6 +323,17 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
 
+    std::ostringstream oss{};
+
+    auto expr = reduce(add(
+        add(mul(mul(var(0), constant(5)), mul(var(1), constant(3))), var(1)),
+        add(constant(20), constant(5))));
+
+    oss << expr;
+
+    errs() << "n0 * (5*n1) + n1 = ";
+    errs() << oss.str() << "\n";
+
     // errs() << "Running analysis for Module " << M.getName() << "\n";
     std::ofstream file{};
 
@@ -384,36 +358,6 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       if (function->isDeclaration())
         continue;
 
-      /*
-      LoopInfo &LI = FAM.getResult<LoopAnalysis>(F);
-
-      if (!LI.empty()) {
-        ScalarEvolution &SE = FAM.getResult<ScalarEvolutionAnalysis>(F);
-
-        errs() << "For Function " << F.getName() << "\n";
-        errs() << "Loops:\n";
-        for (auto &L : LI) {
-          errs() << L->getName() << "\n";
-          errs() << "Is rotated: " << (L->isRotatedForm() ? "true" : "false")
-                 << "\n";
-          if (auto bounds = L->getBounds(SE)) {
-            errs() << "Initial Value: " << bounds->getInitialIVValue() <<
-            "\n"; errs() << "Step Value: " << bounds->getStepValue() << "\n";
-            errs() << "Final Value: " << bounds->getFinalIVValue() << "\n";
-            errs() << "Direction "
-                   << (bounds->getDirection() ==
-                               Loop::LoopBounds::Direction::Increasing
-                           ? "Increasing"
-                           : "Decreasing")
-                   << "\n";
-          } else {
-            errs() << "Could not determine loop bounds\n";
-          }
-        }
-        errs() << "Loops end\n";
-      }
-      */
-
       // Name
       const auto name = FR.function->getName();
       ostream << name;
@@ -422,9 +366,9 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       ostream << ",\"" << demangled_name << "\"";
 
       for (auto &inst : insts_to_record) {
-        if (FR.instruction_counts.count(inst)) {
+        if (FR.instruction_costs.count(inst)) {
 
-          ostream << ",(" << FR.instruction_counts.at(inst) << ":";
+          ostream << ",(" << FR.instruction_costs.at(inst) << ":";
           if (FR.energy_per_instruction_type.count(inst)) {
             ostream << FR.energy_per_instruction_type.at(inst) << ")";
           } else {
@@ -436,19 +380,25 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       }
       ostream << "\n";
 
-      // errs() << FR.function->getName() << "\n";
-      //
-      // for (auto &inst : insts_to_record) {
-      //   errs() << inst << ": ";
-      //   CostRelation cr;
-      //   if (FR.instruction_costs.count(inst)) {
-      //     cr = CostRelation(FR.instruction_costs[inst]);
-      //   } else {
-      //     cr = CostRelation();
-      //   }
-      //   errs() << cr;
-      //   errs() << "\n";
-      // }
+      errs() << FR.function->getName() << ":\n";
+      for (auto &BB : *FR.function) {
+        for (auto &inst : BB) {
+          errs() << inst << "\n";
+        }
+      }
+
+      for (auto &inst : insts_to_record) {
+        errs() << inst << ": ";
+        ExprHandle expr;
+        if (FR.instruction_costs.count(inst)) {
+          expr = FR.instruction_costs[inst];
+        } else {
+          expr = constant(0);
+        }
+        errs() << expr;
+        errs() << "\n";
+      }
+      errs() << "\n";
     }
 
     // errs() << "opening file\n";
@@ -490,12 +440,12 @@ void registerPassBuilderCallbacks(PassBuilder &PB) {
       });
 }
 
-} // namespace
+} // namespace EC
 
 /* New PM Registration */
 llvm::PassPluginLibraryInfo getInstructionCountPluginInfo() {
   return {LLVM_PLUGIN_API_VERSION, "InstructionCount", LLVM_VERSION_STRING,
-          registerPassBuilderCallbacks};
+          EC::registerPassBuilderCallbacks};
 }
 
 extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
