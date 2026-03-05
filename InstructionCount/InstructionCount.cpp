@@ -1,4 +1,4 @@
-#include "CostRelation.hpp"
+#include "Expression.hpp"
 #include "llvm/Demangle/Demangle.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -103,27 +103,8 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
       // with this every loop gets its own variable, even those that actually
       // share numbers of iteration
       loop_exprs[loop] = std::move(loop_expr);
-      errs() << "Added " << loop_exprs[loop] << " to a loop\n";
+      // errs() << "Added " << loop_exprs[loop] << " to a loop\n";
     }
-
-    // for (auto &[BB, loops] : BTL) {
-    //   for (auto &inst : *BB) {
-    //     std::string opcode_name = std::string{inst.getOpcodeName()};
-    //     CostRelation new_cr{1};
-    //     for (auto loop : loops) {
-    //       CostRelation old_cr{std::move(new_cr)};
-    //       new_cr = CostRelation{loop_crs[loop]};
-    //       new_cr.add_subrelation(old_cr);
-    //     }
-    //
-    //     // errs() << "Adding " << new_cr << " to "
-    //     //        << result.instruction_costs[opcode_name] << "\n";
-    //     result.instruction_costs[opcode_name] =
-    //         result.instruction_costs[opcode_name] + new_cr;
-    //     // errs() << "Equals: " << result.instruction_costs[opcode_name] <<
-    //     // "\n";
-    //   }
-    // }
 
     for (auto &BB : F) {
       for (auto &inst : BB) {
@@ -134,12 +115,12 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
             // CostRelation old_cr{std::move(new_cr)};
             // new_cr = CostRelation{loop_crs[loop]};
             // new_cr.add_subrelation(old_cr);
-            expr = reduce(mul(loop_exprs[loop], expr));
+            expr = mul({loop_exprs[loop], expr});
           }
         }
         if (result.instruction_costs.count(opcode_name)) {
           result.instruction_costs[opcode_name] =
-              reduce(add(result.instruction_costs[opcode_name], expr));
+              add({result.instruction_costs[opcode_name], expr});
 
         } else {
           result.instruction_costs[opcode_name] = expr;
@@ -151,12 +132,13 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
           result.outgoing_calls.emplace(called_F);
 
           if (result.outgoing_calls_costs.count(called_F)) {
-            errs() << "Adding expr: " << expr << " to "
-                   << result.outgoing_calls_costs[called_F] << "\n";
+            // errs() << "Adding expr: " << expr << " to "
+            //        << result.outgoing_calls_costs[called_F] << "\n";
             result.outgoing_calls_costs[called_F] =
-                reduce(add(result.outgoing_calls_costs[called_F], expr));
-            errs() << "Now it's at: " << result.outgoing_invokes_costs[called_F]
-                   << "\n";
+                add({result.outgoing_calls_costs[called_F], expr});
+            // errs() << "Now it's at: " <<
+            // result.outgoing_invokes_costs[called_F]
+            //        << "\n";
           } else {
             result.outgoing_calls_costs[called_F] = expr;
           }
@@ -165,12 +147,13 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
           result.outgoing_invokes.emplace(called_F);
 
           if (result.outgoing_invokes_costs.count(called_F)) {
-            errs() << "Adding expr: " << expr << " to "
-                   << result.outgoing_invokes_costs[called_F] << "\n";
+            // errs() << "Adding expr: " << expr << " to "
+            //        << result.outgoing_invokes_costs[called_F] << "\n";
             result.outgoing_invokes_costs[called_F] =
-                reduce(add(result.outgoing_invokes_costs[called_F], expr));
-            errs() << "Now it's at: " << result.outgoing_invokes_costs[called_F]
-                   << "\n";
+                add({result.outgoing_invokes_costs[called_F], expr});
+            // errs() << "Now it's at: " <<
+            // result.outgoing_invokes_costs[called_F]
+            //        << "\n";
           } else {
             result.outgoing_invokes_costs[called_F] = expr;
           }
@@ -218,35 +201,35 @@ struct ECAccumulationFunctionAnalysis
   void doAccumulation(Result &prev_result, Result &called_result,
                       ExprHandle call_expr) {
     for (auto &[k, v] : called_result.instruction_costs) {
-      errs() << "For inst: " << k << " and its expr: " << v
-             << " from previous function\n";
+      // errs() << "For inst: " << k << " and its expr: " << v
+      //        << " from previous function\n";
       if (prev_result.instruction_costs.count(k)) {
-        errs() << "Was already in this functions result with value: "
-               << prev_result.instruction_costs[k] << ". Modifying it.\n";
+        // errs() << "Was already in this functions result with value: "
+        //        << prev_result.instruction_costs[k] << ". Modifying it.\n";
         prev_result.instruction_costs[k] =
-            reduce(add(prev_result.instruction_costs[k], mul(call_expr, v)));
+            add({prev_result.instruction_costs[k], mul({call_expr, v})});
       } else {
-        errs() << "Was not yet in this functions result. Adding it.\n";
-        prev_result.instruction_costs[k] = mul(call_expr, v);
+        // errs() << "Was not yet in this functions result. Adding it.\n";
+        prev_result.instruction_costs[k] = mul({call_expr, v});
       }
     }
   }
 
   Result run(Function &F, FunctionAnalysisManager &FAM) {
-    errs() << "In ECAFA:\n";
+    // errs() << "In ECAFA:\n";
     Result prev_result = getECFunctionAnalysisResult(&F, FAM);
 
     for (auto *called_F : prev_result.outgoing_calls) {
-      errs() << "For call to function " << called_F->getName() << ":\n";
+      // errs() << "For call to function " << called_F->getName() << ":\n";
       if (called_F == &F) {
-        errs() << "Skipping a recursion at Function: " << called_F->getName()
-               << "\n";
+        // errs() << "Skipping a recursion at Function: " << called_F->getName()
+        //        << "\n";
         continue;
       }
-      errs() << "Getting its results\n";
+      // errs() << "Getting its results\n";
       Result called_F_result =
           FAM.getResult<ECAccumulationFunctionAnalysis>(*called_F);
-      errs() << "Got its results\n";
+      // errs() << "Got its results\n";
       // for (auto &[k, v] : called_F_result.instruction_counts) {
       //   prev_result.instruction_counts[k] += v;
       // }
@@ -256,16 +239,17 @@ struct ECAccumulationFunctionAnalysis
       }
     }
     for (auto *invoked_F : prev_result.outgoing_invokes) {
-      errs() << "For invoke to function " << invoked_F->getName() << ":\n";
+      // errs() << "For invoke to function " << invoked_F->getName() << ":\n";
       if (invoked_F == &F) {
-        errs() << "Skipping a recursion at Function: " << invoked_F->getName()
-               << "\n";
+        // errs() << "Skipping a recursion at Function: " <<
+        // invoked_F->getName()
+        //        << "\n";
         continue;
       }
-      errs() << "Getting its results\n";
+      // errs() << "Getting its results\n";
       Result invoked_F_result =
           FAM.getResult<ECAccumulationFunctionAnalysis>(*invoked_F);
-      errs() << "Got its results\n";
+      // errs() << "Got its results\n";
       // for (auto &[k, v] : invoked_F_result.instruction_counts) {
       //   prev_result.instruction_counts[k] += v;
       // }
@@ -316,23 +300,12 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
     // getInstructionCounts(F);
 
-    errs() << "-- Function Pass!" << "\n";
-    errs() << "This pass currently does nothing" << "\n";
+    // errs() << "-- Function Pass!" << "\n";
+    // errs() << "This pass currently does nothing" << "\n";
     return PreservedAnalyses::all();
   }
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
-
-    std::ostringstream oss{};
-
-    auto expr = reduce(add(
-        add(mul(mul(var(0), constant(5)), mul(var(1), constant(3))), var(1)),
-        add(constant(20), constant(5))));
-
-    oss << expr;
-
-    errs() << "n0 * (5*n1) + n1 = ";
-    errs() << oss.str() << "\n";
 
     // errs() << "Running analysis for Module " << M.getName() << "\n";
     std::ofstream file{};
@@ -380,25 +353,14 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       }
       ostream << "\n";
 
-      errs() << FR.function->getName() << ":\n";
-      for (auto &BB : *FR.function) {
-        for (auto &inst : BB) {
-          errs() << inst << "\n";
-        }
-      }
-
       for (auto &inst : insts_to_record) {
-        errs() << inst << ": ";
         ExprHandle expr;
         if (FR.instruction_costs.count(inst)) {
           expr = FR.instruction_costs[inst];
         } else {
           expr = constant(0);
         }
-        errs() << expr;
-        errs() << "\n";
       }
-      errs() << "\n";
     }
 
     // errs() << "opening file\n";

@@ -30,7 +30,9 @@ using ExprHandle = std::shared_ptr<Expr>;
 struct Variable {
   static std::size_t latest_id;
   std::size_t id;
-  Variable(std::size_t id);
+  std::size_t factor;
+  std::size_t exponent;
+  Variable(std::size_t id, std::size_t factor = 1, std::size_t exponent = 1);
   Variable(const Variable &variable);
 };
 
@@ -41,17 +43,15 @@ struct Constant {
 };
 
 struct Addition {
-  ExprHandle left;
-  ExprHandle right;
-  Addition(ExprHandle left, ExprHandle right);
+  std::vector<ExprHandle> terms;
+  Addition(std::vector<ExprHandle> terms);
   Addition(const Addition &addition);
 };
 
 struct Multiplication {
-  ExprHandle left;
-  ExprHandle right;
-  Multiplication(ExprHandle left, ExprHandle right);
-  Multiplication(const Multiplication &multiplication);
+  std::vector<ExprHandle> terms;
+  Multiplication(std::vector<ExprHandle> terms);
+  Multiplication(const Multiplication &addition);
 };
 
 struct Expr : std::variant<Variable, Constant, Addition, Multiplication> {
@@ -64,20 +64,20 @@ ExprHandle reduce(const ExprHandle expr);
 std::ostream &operator<<(std::ostream &os, const ExprHandle expr);
 raw_ostream &operator<<(raw_ostream &os, const ExprHandle expr);
 
-inline ExprHandle var(std::size_t id) {
-  return std::make_shared<Expr>(Variable(id));
+inline ExprHandle var(std::size_t id, std::size_t factor = 1,
+                      std::size_t exponent = 1) {
+  return std::make_shared<Expr>(Variable(id, factor, exponent));
 }
 
 inline ExprHandle constant(std::size_t value) {
   return std::make_shared<Expr>(Constant(value));
 }
 
-inline ExprHandle mul(ExprHandle left, ExprHandle right) {
-  return std::make_shared<Expr>(
-      Multiplication(std::move(left), std::move(right)));
+inline ExprHandle mul(std::vector<ExprHandle> terms) {
+  return reduce(std::make_shared<Expr>(Multiplication(terms)));
 }
 
-inline ExprHandle add(ExprHandle left, ExprHandle right) {
-  return std::make_shared<Expr>(Addition(std::move(left), std::move(right)));
+inline ExprHandle add(std::vector<ExprHandle> terms) {
+  return reduce(std::make_shared<Expr>(Addition(terms)));
 }
 } // namespace EC
