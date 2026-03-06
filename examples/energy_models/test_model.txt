@@ -1,0 +1,6 @@
+alloca:3
+load:6
+mul:10
+fmul:15
+add: 3
+fadd: 5

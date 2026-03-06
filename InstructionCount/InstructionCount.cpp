@@ -1,30 +1,44 @@
 #include "Expression.hpp"
-#include "llvm/Demangle/Demangle.h"
-#include "llvm/IR/Mangler.h"
-#include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
-#include "llvm/Support/raw_ostream.h"
 #include <cstddef>
 #include <fstream>
 #include <llvm/Analysis/ScalarEvolution.h>
+#include <llvm/Demangle/Demangle.h>
 #include <llvm/IR/Analysis.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instruction.h>
+#include <llvm/IR/Mangler.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Passes/OptimizationLevel.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/Passes/PassPlugin.h>
 #include <llvm/Support/CommandLine.h>
+#include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/YAMLTraits.h>
+#include <llvm/Support/raw_ostream.h>
 #include <map>
 #include <sstream>
+#include <string>
 #include <vector>
 
 using namespace llvm;
+using llvm::yaml::IO;
+
+struct Config {
+  std::vector<std::string> instructions_to_count;
+  std::string energy_model_name;
+};
+
+template <> struct llvm::yaml::MappingTraits<Config> {
+  static void mapping(IO &io, Config &config) {
+    io.mapRequired("energy_model_name", config.energy_model_name);
+    io.mapRequired("instructions_to_count", config.instructions_to_count);
+  }
+};
 
 namespace EC {
 
-const std::map<std::string, std::size_t> energy_model{
-    {"alloca", 3}, {"load", 6}, {"mul", 10},
-    {"fmul", 15},  {"add", 2},  {"fadd", 5}};
+std::map<std::string, std::size_t> energy_model{};
 
 struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
   struct Result {
@@ -297,6 +311,9 @@ AnalysisKey ECAccumulationFunctionAnalysis::Key;
 AnalysisKey ECModuleAnalysis::Key;
 
 struct InstructionCount : PassInfoMixin<InstructionCount> {
+
+  static std::size_t iteration;
+
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
     // getInstructionCounts(F);
 
@@ -308,7 +325,79 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
 
     // errs() << "Running analysis for Module " << M.getName() << "\n";
-    std::ofstream file{};
+
+    // read config
+    std::string config_file_path{"./main.yaml"};
+
+    ErrorOr<std::unique_ptr<MemoryBuffer>> mb =
+        MemoryBuffer::getFile(config_file_path);
+    if (!mb) {
+      errs() << "Error opening file at " << config_file_path << "\n";
+      errs() << "Exiting pass early\n";
+      return PreservedAnalyses::all();
+    }
+
+    yaml::Input yin((*mb)->getBuffer());
+
+    Config config;
+    yin >> config;
+    if (auto error = yin.error()) {
+      errs() << error.message() << "\n";
+      errs() << "Error reading config file at " << config_file_path << ".\n";
+      errs() << "Exiting pass early\n";
+      return PreservedAnalyses::all();
+    }
+
+    // errs() << "Instructions to count are:\n";
+    // for (const auto &str : config.instructions_to_count) {
+    //   errs() << str << ",";
+    // }
+    // errs() << "\n";
+    // errs() << "Chosen energy model: " << config.energy_model_name << "\n";
+    // load energy model:
+    std::ifstream energy_model_file;
+    std::string energy_model_dir_path = "./energy_models/";
+    std::string energy_model_file_path =
+        energy_model_dir_path + config.energy_model_name + ".txt";
+
+    energy_model_file.open(energy_model_file_path);
+    if (!energy_model_file.is_open()) {
+      errs() << "Error opening energy model file at " << energy_model_file_path
+             << "\n";
+      errs() << "Exiting pass early\n";
+      return PreservedAnalyses::all();
+    }
+
+    std::ostringstream osstr;
+    osstr << energy_model_file.rdbuf();
+    std::string energy_model_contents = osstr.str();
+    // errs() << "Energy model file contents:\n" << energy_model_contents <<
+    // "\n";
+
+    energy_model_file.close();
+
+    std::string line;
+    std::istringstream isstr{energy_model_contents};
+    while (std::getline(isstr, line)) {
+      std::size_t colon_pos = line.find(":", 0);
+      if (colon_pos == std::string::npos) {
+        errs() << "Line \"" << line << "\" in energy model file at "
+               << energy_model_file_path << " is malformed. Skipping\n";
+        continue;
+      }
+      std::string instruction_name = line.substr(0, colon_pos);
+      std::string energy_usage_str = line.substr(colon_pos + 1);
+      if (energy_usage_str.empty()) {
+        errs() << "Line \"" << line << "\" in energy model file at "
+               << energy_model_file_path << "is malformed. Skipping\n";
+        continue;
+      }
+      std::size_t energy_usage = std::stoull(energy_usage_str);
+      // errs() << "inst name: " << instruction_name
+      //        << " energy usage: " << energy_usage << "\n";
+
+      energy_model[instruction_name] = energy_usage;
+    }
 
     std::string output_str{};
     raw_string_ostream ostream{output_str};
@@ -318,8 +407,8 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
         "mul",    "add",  "fmul",  "fadd",
     };
 
-    ostream << "Function Name, Demangled Name";
-    for (auto &inst : insts_to_record) {
+    ostream << "Function Name,Demangled Name";
+    for (auto &inst : config.instructions_to_count) {
       ostream << "," << inst;
     }
     ostream << "\n";
@@ -338,7 +427,7 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       // if (name != demangled_name) {
       ostream << ",\"" << demangled_name << "\"";
 
-      for (auto &inst : insts_to_record) {
+      for (auto &inst : config.instructions_to_count) {
         if (FR.instruction_costs.count(inst)) {
 
           ostream << ",(" << FR.instruction_costs.at(inst) << ":";
@@ -353,7 +442,7 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       }
       ostream << "\n";
 
-      for (auto &inst : insts_to_record) {
+      for (auto &inst : config.instructions_to_count) {
         ExprHandle expr;
         if (FR.instruction_costs.count(inst)) {
           expr = FR.instruction_costs[inst];
@@ -363,10 +452,19 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       }
     }
 
+    std::ofstream csv_file{};
+
     // errs() << "opening file\n";
-    file.open("./output.csv");
-    file << output_str << "\n";
-    file.close();
+    if (iteration != 0) {
+      std::stringstream ss{};
+      ss << "./output" << iteration << ".txt";
+      csv_file.open(ss.str());
+      iteration++;
+    } else {
+      csv_file.open("./output.csv");
+    }
+    csv_file << output_str << "\n";
+    csv_file.close();
     // errs() << "closed file\n";
 
     return PreservedAnalyses::all();
@@ -374,6 +472,7 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
 
   // static bool isRequired() { return true; }
 };
+std::size_t InstructionCount::iteration = 0;
 
 void registerPassBuilderCallbacks(PassBuilder &PB) {
   PB.registerAnalysisRegistrationCallback([](FunctionAnalysisManager &FAM) {
