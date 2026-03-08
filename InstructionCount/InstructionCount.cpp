@@ -28,6 +28,7 @@ struct Config {
   std::vector<std::string> instructions_to_count;
   std::string energy_model_name;
   bool verbose = false;
+  bool loaded = false;
 };
 
 template <> struct llvm::yaml::MappingTraits<Config> {
@@ -311,86 +312,102 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     return PreservedAnalyses::all();
   }
 
+  bool loadConfig() {
+    if (!config.loaded) {
+
+      std::string config_file_path{"./main.yaml"};
+
+      ErrorOr<std::unique_ptr<MemoryBuffer>> mb =
+          MemoryBuffer::getFile(config_file_path);
+      if (!mb) {
+        errs() << "Error opening file at " << config_file_path << "\n";
+        errs() << "Exiting pass early\n";
+        return false;
+      }
+
+      yaml::Input yin((*mb)->getBuffer());
+
+      yin >> config;
+      if (auto error = yin.error()) {
+        errs() << error.message() << "\n";
+        errs() << "Error reading config file at " << config_file_path << ".\n";
+        errs() << "Exiting pass early\n";
+        return false;
+      }
+
+      // errs() << "Instructions to count are:\n";
+      // for (const auto &str : config.instructions_to_count) {
+      //   errs() << str << ",";
+      // }
+      // errs() << "\n";
+      // errs() << "Chosen energy model: " << config.energy_model_name << "\n";
+      // load energy model:
+      std::ifstream energy_model_file;
+      std::string energy_model_dir_path = "./energy_models/";
+      std::string energy_model_file_path =
+          energy_model_dir_path + config.energy_model_name + ".txt";
+
+      energy_model_file.open(energy_model_file_path);
+      if (!energy_model_file.is_open()) {
+        errs() << "Error opening energy model file at "
+               << energy_model_file_path << "\n";
+        errs() << "Exiting pass early\n";
+        return false;
+      }
+
+      std::ostringstream osstr;
+      osstr << energy_model_file.rdbuf();
+      std::string energy_model_contents = osstr.str();
+      // errs() << "Energy model file contents:\n" << energy_model_contents <<
+      // "\n";
+
+      energy_model_file.close();
+
+      std::string line;
+      std::istringstream isstr{energy_model_contents};
+      while (std::getline(isstr, line)) {
+        std::size_t colon_pos = line.find(":", 0);
+        if (colon_pos == std::string::npos) {
+          errs() << "Line \"" << line << "\" in energy model file at "
+                 << energy_model_file_path << " is malformed. Skipping\n";
+          continue;
+        }
+        std::string instruction_name = line.substr(0, colon_pos);
+        std::string energy_usage_str = line.substr(colon_pos + 1);
+        if (energy_usage_str.empty()) {
+          errs() << "Line \"" << line << "\" in energy model file at "
+                 << energy_model_file_path << "is malformed. Skipping\n";
+          continue;
+        }
+        std::size_t energy_usage = std::stoull(energy_usage_str);
+        // errs() << "inst name: " << instruction_name
+        //        << " energy usage: " << energy_usage << "\n";
+
+        energy_model[instruction_name] = energy_usage;
+      }
+      config.loaded = true;
+    }
+    return true;
+  }
+
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
 
     // read config
+
+    if (!loadConfig()) {
+      return PreservedAnalyses::all();
+    }
 
     auto &triple = M.getTargetTriple();
     if (!(triple.isNVPTX() || triple.isAMDGPU() || triple.isSPIROrSPIRV())) {
       errs() << "Skipping non-device module\n";
       return PreservedAnalyses::all();
     }
-
-    std::string config_file_path{"./main.yaml"};
-
-    ErrorOr<std::unique_ptr<MemoryBuffer>> mb =
-        MemoryBuffer::getFile(config_file_path);
-    if (!mb) {
-      errs() << "Error opening file at " << config_file_path << "\n";
-      errs() << "Exiting pass early\n";
-      return PreservedAnalyses::all();
-    }
-
-    yaml::Input yin((*mb)->getBuffer());
-
-    yin >> config;
-    if (auto error = yin.error()) {
-      errs() << error.message() << "\n";
-      errs() << "Error reading config file at " << config_file_path << ".\n";
-      errs() << "Exiting pass early\n";
-      return PreservedAnalyses::all();
-    }
-
-    // errs() << "Instructions to count are:\n";
-    // for (const auto &str : config.instructions_to_count) {
-    //   errs() << str << ",";
-    // }
-    // errs() << "\n";
-    // errs() << "Chosen energy model: " << config.energy_model_name << "\n";
-    // load energy model:
-    std::ifstream energy_model_file;
-    std::string energy_model_dir_path = "./energy_models/";
-    std::string energy_model_file_path =
-        energy_model_dir_path + config.energy_model_name + ".txt";
-
-    energy_model_file.open(energy_model_file_path);
-    if (!energy_model_file.is_open()) {
-      errs() << "Error opening energy model file at " << energy_model_file_path
+    if (config.verbose) {
+      errs() << "Analysing a Module with Target Triple: " << triple.getTriple()
              << "\n";
-      errs() << "Exiting pass early\n";
-      return PreservedAnalyses::all();
     }
 
-    std::ostringstream osstr;
-    osstr << energy_model_file.rdbuf();
-    std::string energy_model_contents = osstr.str();
-    // errs() << "Energy model file contents:\n" << energy_model_contents <<
-    // "\n";
-
-    energy_model_file.close();
-
-    std::string line;
-    std::istringstream isstr{energy_model_contents};
-    while (std::getline(isstr, line)) {
-      std::size_t colon_pos = line.find(":", 0);
-      if (colon_pos == std::string::npos) {
-        errs() << "Line \"" << line << "\" in energy model file at "
-               << energy_model_file_path << " is malformed. Skipping\n";
-        continue;
-      }
-      std::string instruction_name = line.substr(0, colon_pos);
-      std::string energy_usage_str = line.substr(colon_pos + 1);
-      if (energy_usage_str.empty()) {
-        errs() << "Line \"" << line << "\" in energy model file at "
-               << energy_model_file_path << "is malformed. Skipping\n";
-        continue;
-      }
-      std::size_t energy_usage = std::stoull(energy_usage_str);
-      // errs() << "inst name: " << instruction_name
-      //        << " energy usage: " << energy_usage << "\n";
-
-      energy_model[instruction_name] = energy_usage;
-    }
     if (config.verbose)
       errs() << "Running analysis for Module " << M.getName() << "\n";
 
