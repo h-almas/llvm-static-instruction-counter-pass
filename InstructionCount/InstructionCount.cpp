@@ -17,6 +17,7 @@
 #include <llvm/Support/YAMLTraits.h>
 #include <llvm/Support/raw_ostream.h>
 #include <map>
+#include <ostream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -145,6 +146,9 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
         Function *called_F = nullptr;
         if (isa<CallInst>(inst)) {
           called_F = cast<CallInst>(inst).getCalledFunction();
+          if (!called_F)
+            continue; // in case it's null
+
           result.outgoing_calls.emplace(called_F);
 
           if (result.outgoing_calls_costs.count(called_F)) {
@@ -161,6 +165,8 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
           }
         } else if (isa<InvokeInst>(inst)) {
           called_F = cast<InvokeInst>(inst).getCalledFunction();
+          if (!called_F)
+            continue; // in case it's null
           result.outgoing_invokes.emplace(called_F);
 
           if (result.outgoing_invokes_costs.count(called_F)) {
@@ -219,7 +225,7 @@ struct ECAccumulationFunctionAnalysis
 
   Result run(Function &F, FunctionAnalysisManager &FAM) {
     if (config.verbose)
-      errs() << "In ECAccumulationFunctionAnalysis:\n";
+      errs() << "In ECAccumulationFunctionAnalysis for" << F.getName() << ":\n";
     Result prev_result = getECFunctionAnalysisResult(&F, FAM);
 
     for (auto *called_F : prev_result.outgoing_calls) {
@@ -232,11 +238,11 @@ struct ECAccumulationFunctionAnalysis
         continue;
       }
       if (config.verbose)
-        errs() << "Getting its results\n";
+        errs() << "Getting result of " << called_F->getName() << "\n";
       Result called_F_result =
           FAM.getResult<ECAccumulationFunctionAnalysis>(*called_F);
       if (config.verbose)
-        errs() << "Got its results\n";
+        errs() << "Got result of " << called_F->getName() << "\n";
       for (auto &[k, v] : called_F_result.instruction_costs) {
         doAccumulation(prev_result, called_F_result,
                        prev_result.outgoing_calls_costs[called_F]);
@@ -287,6 +293,10 @@ struct ECModuleAnalysis : public AnalysisInfoMixin<ECModuleAnalysis> {
     // And then I can run my analysis on those graph nodes
 
     for (auto &F : M) {
+      if (config.verbose) {
+        errs() << "Running ECAccumulationFunctionAnalysis for " << F.getName()
+               << "\n";
+      }
       result.function_results[&F] =
           FAM.getResult<ECAccumulationFunctionAnalysis>(F);
     }
@@ -301,8 +311,6 @@ AnalysisKey ECAccumulationFunctionAnalysis::Key;
 AnalysisKey ECModuleAnalysis::Key;
 
 struct InstructionCount : PassInfoMixin<InstructionCount> {
-
-  static std::size_t iteration;
 
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
     // getInstructionCounts(F);
@@ -461,14 +469,13 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     std::ofstream csv_file{};
 
     // errs() << "opening file\n";
-    if (iteration != 0) {
-      std::stringstream ss{};
-      ss << "./output" << iteration << ".txt";
-      csv_file.open(ss.str());
-      iteration++;
-    } else {
-      csv_file.open("./output.csv");
-    }
+
+    std::string output_content;
+    raw_string_ostream os(output_content);
+    os << "./output-" << M.getName() << "-" << M.getTargetTriple().getTriple()
+       << ".csv";
+    csv_file.open(os.str());
+
     csv_file << output_str << "\n";
     csv_file.close();
     // errs() << "closed file\n";
@@ -478,7 +485,6 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
 
   // static bool isRequired() { return true; }
 };
-std::size_t InstructionCount::iteration = 0;
 
 void registerPassBuilderCallbacks(PassBuilder &PB) {
   PB.registerAnalysisRegistrationCallback([](FunctionAnalysisManager &FAM) {

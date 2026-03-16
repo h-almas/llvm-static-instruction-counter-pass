@@ -176,13 +176,14 @@ ExprHandle reduce(const ExprHandle expr) {
       // distributive law:
       // find an addition and create a multiplication for each of its summands
       std::vector<ExprHandle> factors;
-      Addition *selected_addition;
+      std::vector<ExprHandle> selected_addition_terms;
       for (auto &t : m.terms) {
         if (Addition *a = std::get_if<Addition>(t.get())) {
-          selected_addition = a;
+          selected_addition_terms = a->terms;
           for (auto &t : m.terms) {
-            if (Addition *a = std::get_if<Addition>(t.get())) {
-              continue; // we don't want the same one
+            if (Addition *a2 = std::get_if<Addition>(t.get())) {
+              if (a2 == a)
+                continue; // we don't want the same one
             }
             factors.push_back(t);
           }
@@ -190,10 +191,14 @@ ExprHandle reduce(const ExprHandle expr) {
         }
       }
       std::vector<ExprHandle> new_multiplications;
-      for (auto &t : selected_addition->terms) {
-        std::vector<ExprHandle> new_term{factors};
-        new_term.push_back(t);
-        new_multiplications.push_back(mul(new_term));
+
+      // only if an addition was actually found:
+      if (!selected_addition_terms.empty()) {
+        for (auto &t : selected_addition_terms) {
+          std::vector<ExprHandle> new_term{factors};
+          new_term.push_back(t);
+          new_multiplications.push_back(mul(new_term));
+        }
       }
 
       if (new_multiplications.size() > 0) {
