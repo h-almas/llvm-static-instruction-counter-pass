@@ -30,6 +30,7 @@ struct Config {
   std::vector<std::string> instructions_to_count;
   std::string energy_model_name;
   bool verbose = false;
+  bool run_tests = false;
   bool loaded = false;
 };
 
@@ -38,6 +39,7 @@ template <> struct llvm::yaml::MappingTraits<Config> {
     io.mapRequired("energy_model_name", config.energy_model_name);
     io.mapRequired("instructions_to_count", config.instructions_to_count);
     io.mapOptional("verbose", config.verbose);
+    io.mapOptional("run_tests", config.run_tests);
   }
 };
 
@@ -399,19 +401,77 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     return true;
   }
 
+  bool run_test(std::string test_name, std::string actual,
+                std::string expected) {
+    if (actual != expected) {
+      errs() << test_name << " failed, expected: " << expected
+             << "\n\tactual: " << actual << "\n";
+      return false;
+    }
+    errs() << test_name << " passed\n";
+    return true;
+  }
+  void tests() {
+    // expressions
+
+    // 0 constant
+    {
+      ExprHandle c0 = constant(0);
+      std::string expected = "0";
+      std::string actual = toString(c0);
+      run_test("0 constant", actual, expected);
+    }
+
+    {
+      ExprHandle c0 = constant(0);
+      ExprHandle c1 = constant(1);
+      std::string expected = "1";
+      std::string actual = toString(add({c0, c1}));
+      run_test("0 plus 1", actual, expected);
+    }
+
+    {
+      ExprHandle v0 = var(0);
+      ExprHandle c1 = constant(1);
+      ExprHandle a1 = add({constant(1), v0});
+      ExprHandle c2 = constant(2);
+      ExprHandle a2 = add({a1, c2});
+      run_test("nested addition", toString(a2), "3+n0");
+      run_test("c1 unchanged", toString(c1), "1");
+      run_test("a1 unchanged", toString(a1), "1+n0");
+    }
+
+    {
+      ExprHandle m0 = mul({var(0), add({constant(1), var(1)})});
+      run_test("distributive law and mult with 1", toString(m0), "n0+(n0*n1)");
+      ExprHandle c21 = constant(21);
+      ExprHandle c2 = constant(2);
+      ExprHandle m1 = mul({m0, c21, c2});
+      run_test("distributive, nested mult and constant propagation",
+               toString(m1), "42n0+(42n0*n1)");
+      run_test("mul 0", toString(mul({m1, constant(0)})), "0");
+      run_test("m1 unchanged", toString(m1), "42n0+(42n0*n1)");
+    }
+  }
+
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
 
     // read config
-
     if (!loadConfig()) {
       return PreservedAnalyses::all();
     }
 
-    auto &triple = M.getTargetTriple();
-    if (!(triple.isNVPTX() || triple.isAMDGPU() || triple.isSPIROrSPIRV())) {
-      errs() << "Skipping non-device module\n";
-      return PreservedAnalyses::all();
+    // run tests
+    if (config.run_tests) {
+      tests();
+      exit(0);
     }
+
+    auto &triple = M.getTargetTriple();
+    // if (!(triple.isNVPTX() || triple.isAMDGPU() || triple.isSPIROrSPIRV())) {
+    //   errs() << "Skipping non-device module\n";
+    //   return PreservedAnalyses::all();
+    // }
     if (config.verbose) {
       errs() << "Analysing a Module with Target Triple: " << triple.getTriple()
              << "\n";
