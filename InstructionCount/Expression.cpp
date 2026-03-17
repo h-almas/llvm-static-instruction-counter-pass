@@ -86,7 +86,7 @@ ExprHandle reduce(const ExprHandle expr) {
         }
       }
 
-      // adding variables up
+      // adding single variables up
       for (auto it = a.terms.begin(); it < a.terms.end(); it++) {
         if (Variable *var_term = std::get_if<Variable>(it->get())) {
           for (auto jt = it + 1; jt < a.terms.end();) {
@@ -107,6 +107,68 @@ ExprHandle reduce(const ExprHandle expr) {
 
       if (a.terms.size() == 1) {
         return a.terms[0];
+      }
+
+      // adding multiplications with same variables up
+
+      for (auto it = a.terms.begin(); it < a.terms.end(); it++) {
+        if (Multiplication *mul_term = std::get_if<Multiplication>(it->get())) {
+          for (auto jt = it + 1; jt < a.terms.end();) {
+            if (Multiplication *mul_term2 =
+                    std::get_if<Multiplication>(jt->get())) {
+              // when a multiplication is reduced, it should only consist of
+              // variables, with the first variable holding the multiplication
+              // of the constant factors
+              bool can_be_added = true;
+              if (mul_term->terms.size() != mul_term2->terms.size()) {
+                can_be_added = false;
+              }
+
+              for (auto &t1 : mul_term->terms) {
+                bool found_match = false;
+                if (Variable *v1 =
+                        std::get_if<Variable>(mul_term->terms[0].get())) {
+                  for (auto &t2 : mul_term2->terms) {
+                    if (Variable *v2 =
+                            std::get_if<Variable>(mul_term2->terms[0].get())) {
+                      if (v1->id == v2->id && v1->exponent == v2->exponent) {
+                        found_match = true;
+                        break;
+                      }
+                    } else {
+                      errs() << "This should not happen!\n";
+                    }
+                  }
+                } else {
+                  errs() << "This should not happen!\n";
+                }
+                if (!found_match) {
+                  can_be_added = false;
+                  break;
+                }
+              }
+
+              if (can_be_added) {
+                if (Variable *v1 =
+                        std::get_if<Variable>(mul_term->terms[0].get())) {
+                  if (Variable *v2 =
+                          std::get_if<Variable>(mul_term2->terms[0].get())) {
+                    v1->factor += v2->factor;
+                  } else {
+                    errs() << "This should not happen!\n";
+                  }
+                } else {
+                  errs() << "This should not happen!\n";
+                }
+                jt = a.terms.erase(jt);
+              } else {
+                jt++;
+              }
+            } else {
+              jt++;
+            }
+          }
+        }
       }
 
       return std::make_shared<Expr>(a);
@@ -171,6 +233,19 @@ ExprHandle reduce(const ExprHandle expr) {
 
       if (m.terms.size() == 1) {
         return m.terms[0];
+      }
+
+      // at this point there will be only variables and additions
+      // for all variables, propagate their factors to the first variable
+      for (auto it = m.terms.begin(); it != m.terms.end(); it++) {
+        if (Variable *v1 = std::get_if<Variable>(it->get())) {
+          for (auto jt = it + 1; jt < m.terms.end(); jt++) {
+            if (Variable *v2 = std::get_if<Variable>(jt->get())) {
+              v1->factor *= v2->factor;
+              v2->factor = 1;
+            }
+          }
+        }
       }
 
       // distributive law:
