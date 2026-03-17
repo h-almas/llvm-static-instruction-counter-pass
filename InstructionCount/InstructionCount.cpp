@@ -473,8 +473,7 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
 
     std::string output_content;
     raw_string_ostream os(output_content);
-    os << "./output-" << M.getName() << "-" << M.getTargetTriple().getTriple()
-       << ".csv";
+    os << M.getName() << "-" << M.getTargetTriple().getTriple() << ".csv";
     csv_file.open(os.str());
 
     csv_file << output_str << "\n";
