@@ -9,6 +9,7 @@
 #include <llvm/IR/Instruction.h>
 #include <llvm/IR/Mangler.h>
 #include <llvm/IR/PassManager.h>
+#include <llvm/Pass.h>
 #include <llvm/Passes/OptimizationLevel.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/PassPlugin.h>
@@ -503,14 +504,15 @@ void registerPassBuilderCallbacks(PassBuilder &PB) {
         }
         return false;
       });
-  PB.registerPipelineStartEPCallback(
-      [](ModulePassManager &MPM, OptimizationLevel Level) {
-        // FunctionPassManager FPM;
-        // FPM.addPass(InstructionCount());
+  PB.registerOptimizerLastEPCallback([](ModulePassManager &MPM,
+                                        OptimizationLevel Level,
+                                        ThinOrFullLTOPhase TOF) {
+    // FunctionPassManager FPM;
+    // FPM.addPass(InstructionCount());
 
-        MPM.addPass(InstructionCount());
-        // MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
-      });
+    MPM.addPass(InstructionCount());
+    // MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
+  });
 }
 
 } // namespace EC
