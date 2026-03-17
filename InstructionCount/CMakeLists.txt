@@ -26,6 +26,7 @@ include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
 #===============================================================================
 # Use the same C++ standard as LLVM does
 set(CMAKE_CXX_STANDARD 17 CACHE STRING "")
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # LLVM is normally built without RTTI. Be consistent with that.
 if(NOT LLVM_ENABLE_RTTI)
