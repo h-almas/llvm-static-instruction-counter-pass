@@ -569,8 +569,10 @@ void registerPassBuilderCallbacks(PassBuilder &PB) {
     // FunctionPassManager FPM;
     // FPM.addPass(InstructionCount());
 
-    MPM.addPass(InstructionCount());
-    // MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
+    if (TOF == ThinOrFullLTOPhase::None ||
+        TOF == ThinOrFullLTOPhase::FullLTOPostLink) {
+      MPM.addPass(InstructionCount());
+    }
   });
 }
 
