@@ -326,7 +326,7 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
   bool loadConfig() {
     if (!config.loaded) {
 
-      std::string config_file_path{"./main.yaml"};
+      std::string config_file_path{"./config.yaml"};
 
       ErrorOr<std::unique_ptr<MemoryBuffer>> mb =
           MemoryBuffer::getFile(config_file_path);
@@ -468,10 +468,10 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     }
 
     auto &triple = M.getTargetTriple();
-    // if (!(triple.isNVPTX() || triple.isAMDGPU() || triple.isSPIROrSPIRV())) {
-    //   errs() << "Skipping non-device module\n";
-    //   return PreservedAnalyses::all();
-    // }
+    if (!(triple.isNVPTX() || triple.isAMDGPU() || triple.isSPIROrSPIRV())) {
+      errs() << "Skipping non-device module\n";
+      return PreservedAnalyses::all();
+    }
     if (config.verbose) {
       errs() << "Analysing a Module with Target Triple: " << triple.getTriple()
              << "\n";

@@ -1,3 +1,4 @@
 instructions_to_count: [alloca, load, store, fmul, fadd, mul, add]
 energy_model_name: test_model
 verbose: false
+run_tests: false
