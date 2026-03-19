@@ -151,7 +151,14 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
         if (isa<CallInst>(inst)) {
           called_F = cast<CallInst>(inst).getCalledFunction();
           if (!called_F)
-            continue; // in case it's null
+            continue;           // in case it's null
+          if (called_F == &F) { // if it's a recursion
+            result.recursion_expr =
+                add({result.recursion_expr,
+                     mul({expr, var(Variable::latest_id++)})});
+
+            continue;
+          }
 
           result.outgoing_calls.emplace(called_F);
 
@@ -170,7 +177,15 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
         } else if (isa<InvokeInst>(inst)) {
           called_F = cast<InvokeInst>(inst).getCalledFunction();
           if (!called_F)
-            continue; // in case it's null
+            continue;           // in case it's null
+          if (called_F == &F) { // if it's a recursion
+            result.recursion_expr =
+                add({result.recursion_expr,
+                     mul({expr, var(Variable::latest_id++)})});
+
+            continue;
+          }
+
           result.outgoing_invokes.emplace(called_F);
 
           if (result.outgoing_invokes_costs.count(called_F)) {
@@ -218,11 +233,13 @@ struct ECAccumulationFunctionAnalysis
           errs() << "Was already in this functions result with value: "
                  << prev_result.instruction_costs[k] << ". Modifying it.\n";
         prev_result.instruction_costs[k] =
-            add({prev_result.instruction_costs[k], mul({call_expr, v})});
+            add({prev_result.instruction_costs[k],
+                 mul({called_result.recursion_expr, call_expr, v})});
       } else {
         if (config.verbose)
           errs() << "Was not yet in this functions result. Adding it.\n";
-        prev_result.instruction_costs[k] = mul({call_expr, v});
+        prev_result.instruction_costs[k] =
+            mul({called_result.recursion_expr, call_expr, v});
       }
     }
   }
@@ -236,32 +253,32 @@ struct ECAccumulationFunctionAnalysis
     for (auto *called_F : prev_result.outgoing_calls) {
       if (config.verbose)
         errs() << "For call to function " << called_F->getName() << ":\n";
-      if (called_F == &F) {
-        if (config.verbose)
-          errs() << "Skipping a recursion at Function: " << called_F->getName()
-                 << "\n";
-        continue;
-      }
+      // if (called_F == &F) {
+      //   if (config.verbose)
+      //     errs() << "Skipping a recursion at Function: " <<
+      //     called_F->getName()
+      //            << "\n";
+      //   continue;
+      // }
       if (config.verbose)
         errs() << "Getting result of " << called_F->getName() << "\n";
       Result called_F_result =
           FAM.getResult<ECAccumulationFunctionAnalysis>(*called_F);
       if (config.verbose)
         errs() << "Got result of " << called_F->getName() << "\n";
-      for (auto &[k, v] : called_F_result.instruction_costs) {
-        doAccumulation(prev_result, called_F_result,
-                       prev_result.outgoing_calls_costs[called_F]);
-      }
+      doAccumulation(prev_result, called_F_result,
+                     prev_result.outgoing_calls_costs[called_F]);
     }
     for (auto *invoked_F : prev_result.outgoing_invokes) {
       if (config.verbose)
         errs() << "For invoke to function " << invoked_F->getName() << ":\n";
-      if (invoked_F == &F) {
-        if (config.verbose)
-          errs() << "Skipping a recursion at Function: " << invoked_F->getName()
-                 << "\n";
-        continue;
-      }
+      // if (invoked_F == &F) {
+      //   if (config.verbose)
+      //     errs() << "Skipping a recursion at Function: " <<
+      //     invoked_F->getName()
+      //            << "\n";
+      //   continue;
+      // }
       if (config.verbose)
         errs() << "Getting its results\n";
       Result invoked_F_result =
