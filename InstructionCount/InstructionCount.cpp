@@ -57,6 +57,7 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
     std::map<Function *, ExprHandle> outgoing_calls_costs{};
     std::set<Function *> outgoing_invokes{};
     std::map<Function *, ExprHandle> outgoing_invokes_costs{};
+    ExprHandle recursion_expr = constant(1);
 
     std::size_t get_total_energy_consumption() {
       std::size_t sum{};
@@ -70,6 +71,8 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
   Result run(Function &F, FunctionAnalysisManager &FAM) {
     Result result;
     result.function = &F;
+    if (F.isDeclaration())
+      return result;
     getInstructionCounts(F, FAM, result);
 
     // for (auto &[k, _] : energy_model) {
@@ -98,8 +101,6 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
 
   void getInstructionCounts(Function &F, FunctionAnalysisManager &FAM,
                             Result &result) {
-    if (F.isDeclaration())
-      return;
     std::string output{};
     raw_string_ostream ostream{output};
 
@@ -228,7 +229,8 @@ struct ECAccumulationFunctionAnalysis
 
   Result run(Function &F, FunctionAnalysisManager &FAM) {
     if (config.verbose)
-      errs() << "In ECAccumulationFunctionAnalysis for" << F.getName() << ":\n";
+      errs() << "In ECAccumulationFunctionAnalysis for " << F.getName()
+             << ":\n";
     Result prev_result = getECFunctionAnalysisResult(&F, FAM);
 
     for (auto *called_F : prev_result.outgoing_calls) {
@@ -468,10 +470,10 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     }
 
     auto &triple = M.getTargetTriple();
-    if (!(triple.isNVPTX() || triple.isAMDGPU() || triple.isSPIROrSPIRV())) {
-      errs() << "Skipping non-device module\n";
-      return PreservedAnalyses::all();
-    }
+    // if (!(triple.isNVPTX() || triple.isAMDGPU() || triple.isSPIROrSPIRV())) {
+    //   errs() << "Skipping non-device module\n";
+    //   return PreservedAnalyses::all();
+    // }
     if (config.verbose) {
       errs() << "Analysing a Module with Target Triple: " << triple.getTriple()
              << "\n";
