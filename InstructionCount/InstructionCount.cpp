@@ -21,6 +21,7 @@
 #include <ostream>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using namespace llvm;
@@ -47,10 +48,11 @@ namespace EC {
 
 std::map<std::string, std::size_t> energy_model{};
 Config config;
+std::map<Function *, std::size_t> function_variable_ids{};
 
 struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
   struct Result {
-    const Function *function;
+    Function *function;
     std::map<std::string, std::size_t> energy_per_instruction_type{};
     std::map<std::string, ExprHandle> instruction_costs{};
     std::set<Function *> outgoing_calls{};
@@ -88,6 +90,34 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
 
   using BlockToLoops = std::map<BasicBlock *, std::vector<Loop *>>;
 
+  using BoundsToLoops = std::map<std::string, std::vector<Loop *>>;
+
+  void assignLoopsToLoopBounds(BoundsToLoops &BTL,
+                               std::vector<Loop *> &unbounded_loops, Loop *loop,
+                               ScalarEvolution &SE) {
+    for (Loop *l_inner : *loop) {
+      assignLoopsToLoopBounds(BTL, unbounded_loops, l_inner, SE);
+    }
+
+    auto bounds_opt = loop->getBounds(SE);
+    if (bounds_opt.has_value()) {
+      auto bounds = bounds_opt.value();
+      // errs() << "Bounds: " << bounds.getInitialIVValue()
+      //        << " to: " << bounds.getFinalIVValue()
+      //        << " Step: " << bounds.getStepValue() << "\n";
+
+      // not ideal solution
+      std::string str;
+      raw_string_ostream os(str);
+      os << bounds.getInitialIVValue() << bounds.getFinalIVValue()
+         << bounds.getStepValue();
+      BTL[os.str()].push_back(loop);
+    } else {
+      unbounded_loops.push_back(loop);
+      errs() << "Bounds not detected\n";
+    }
+  }
+
   void assignLoopsToBasicBlocks(BlockToLoops &BTL, Loop *loop) {
     for (Loop *l_inner : *loop) {
       assignLoopsToBasicBlocks(BTL, l_inner);
@@ -109,33 +139,62 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
     if (config.verbose)
       errs() << "Counting function " << demangle(F.getName()) << "\n";
 
-    BlockToLoops BTL{};
+    BlockToLoops BlTL{};
+    BoundsToLoops BoTL{};
+    std::vector<Loop *> unbounded_loops{};
 
     std::map<Loop *, ExprHandle> loop_exprs{};
 
     LoopInfo &LI = FAM.getResult<LoopAnalysis>(F);
+    ScalarEvolution &SE = FAM.getResult<ScalarEvolutionAnalysis>(F);
     for (Loop *loop : LI) {
-      assignLoopsToBasicBlocks(BTL, loop);
+      assignLoopsToBasicBlocks(BlTL, loop);
+      assignLoopsToLoopBounds(BoTL, unbounded_loops, loop, SE);
+    }
+
+    if (!BoTL.empty()) {
+      errs() << "BoTL for " << F.getName() << "\n";
+
+      for (auto &[bounds, loops] : BoTL) {
+        errs() << bounds << "\n";
+      }
+      errs() << "\n";
     }
 
     // assign variables to the loops
     if (config.verbose)
       errs() << "Assigning vars to the loops:\n";
-    for (Loop *loop : LI.getLoopsInPreorder()) {
-      ExprHandle loop_expr{var(Variable::latest_id++)};
-      // with this every loop gets its own variable, even those that actually
-      // share numbers of iteration
+    for (auto &[bounds, loops] : BoTL) {
+      errs() << "Size: " << loops.size() << "\n";
+      errs() << "Bounds: " << bounds << "\n";
+      ExprHandle loop_expr{var(Variable::latest_id["n"]++)};
+      for (auto loop : loops) {
+        loop_exprs[loop] = loop_expr;
+        if (config.verbose)
+          errs() << "Added " << loop_exprs[loop] << " to a loop\n";
+      }
+    }
+    for (auto *loop : unbounded_loops) {
+      ExprHandle loop_expr{var(Variable::latest_id["n"]++)};
       loop_exprs[loop] = std::move(loop_expr);
       if (config.verbose)
         errs() << "Added " << loop_exprs[loop] << " to a loop\n";
     }
+    // for (Loop *loop : LI.getLoopsInPreorder()) {
+    //   ExprHandle loop_expr{var(Variable::latest_id["n"]++)};
+    //   // with this every loop gets its own variable, even those that actually
+    //   // share numbers of iteration
+    //   loop_exprs[loop] = std::move(loop_expr);
+    //   if (config.verbose)
+    //     errs() << "Added " << loop_exprs[loop] << " to a loop\n";
+    // }
 
     for (auto &BB : F) {
       for (auto &inst : BB) {
         std::string opcode_name = std::string{inst.getOpcodeName()};
         ExprHandle expr = constant(1);
-        if (BTL.count(&BB)) {
-          for (auto loop : BTL[&BB]) {
+        if (BlTL.count(&BB)) {
+          for (auto loop : BlTL[&BB]) {
             expr = mul({loop_exprs[loop], expr});
           }
         }
@@ -155,7 +214,7 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
           if (called_F == &F) { // if it's a recursion
             result.recursion_expr =
                 add({result.recursion_expr,
-                     mul({expr, var(Variable::latest_id++)})});
+                     mul({expr, var(Variable::latest_id["n"]++)})});
 
             continue;
           }
@@ -181,7 +240,7 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
           if (called_F == &F) { // if it's a recursion
             result.recursion_expr =
                 add({result.recursion_expr,
-                     mul({expr, var(Variable::latest_id++)})});
+                     mul({expr, var(Variable::latest_id["n"]++)})});
 
             continue;
           }
@@ -225,22 +284,44 @@ struct ECAccumulationFunctionAnalysis
   void doAccumulation(Result &prev_result, Result &called_result,
                       ExprHandle call_expr) {
     for (auto &[k, v] : called_result.instruction_costs) {
-      if (config.verbose)
-        errs() << "For inst: " << k << " and its expr: " << v
-               << " from previous function\n";
-      if (prev_result.instruction_costs.count(k)) {
-        if (config.verbose)
-          errs() << "Was already in this functions result with value: "
-                 << prev_result.instruction_costs[k] << ". Modifying it.\n";
-        prev_result.instruction_costs[k] =
-            add({prev_result.instruction_costs[k],
-                 mul({called_result.recursion_expr, call_expr, v})});
+      if (Constant *c = std::get_if<Constant>(v.get())) {
+        if (c->value == 0) {
+          return;
+        }
       } else {
-        if (config.verbose)
-          errs() << "Was not yet in this functions result. Adding it.\n";
-        prev_result.instruction_costs[k] =
-            mul({called_result.recursion_expr, call_expr, v});
+        std::size_t id;
+        if (function_variable_ids.count(called_result.function)) {
+          id = function_variable_ids[called_result.function];
+        } else {
+          id = Variable::latest_id["f"]++;
+          function_variable_ids[called_result.function] = id;
+        }
+        if (prev_result.instruction_costs.count(k)) {
+          prev_result.instruction_costs[k] =
+              add({prev_result.instruction_costs[k],
+                   mul({called_result.recursion_expr, call_expr,
+                        var(id, 1, 1, "f")})});
+        } else {
+          prev_result.instruction_costs[k] = mul(
+              {called_result.recursion_expr, call_expr, var(id, 1, 1, "f")});
+        }
       }
+      // if (config.verbose)
+      //   errs() << "For inst: " << k << " and its expr: " << v
+      //          << " from previous function\n";
+      // if (prev_result.instruction_costs.count(k)) {
+      //   if (config.verbose)
+      //     errs() << "Was already in this functions result with value: "
+      //            << prev_result.instruction_costs[k] << ". Modifying it.\n";
+      //   prev_result.instruction_costs[k] =
+      //       add({prev_result.instruction_costs[k],
+      //            mul({called_result.recursion_expr, call_expr, v})});
+      // } else {
+      //   if (config.verbose)
+      //     errs() << "Was not yet in this functions result. Adding it.\n";
+      //   prev_result.instruction_costs[k] =
+      //       mul({called_result.recursion_expr, call_expr, v});
+      // }
     }
   }
 
@@ -474,6 +555,7 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
   }
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
+    errs() << "Module:\n" << M << "\n";
 
     // read config
     if (!loadConfig()) {
@@ -499,10 +581,14 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     if (config.verbose)
       errs() << "Running analysis for Module " << M.getName() << "\n";
 
+    for (auto &F : M) {
+      function_variable_ids[&F] = Variable::latest_id["f"]++;
+    }
+
     std::string output_str{};
     raw_string_ostream ostream{output_str};
 
-    ostream << "Function Name,Demangled Name";
+    ostream << "Function Name,Demangled Name,fid";
     for (auto &inst : config.instructions_to_count) {
       ostream << "," << inst;
     }
@@ -520,6 +606,7 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       const auto demangled_name = demangle(name);
       // if (name != demangled_name) {
       ostream << ",\"" << demangled_name << "\"";
+      ostream << ",f" << function_variable_ids[function];
 
       for (auto &inst : config.instructions_to_count) {
         if (FR.instruction_costs.count(inst)) {

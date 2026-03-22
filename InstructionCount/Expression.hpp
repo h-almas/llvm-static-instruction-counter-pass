@@ -12,6 +12,7 @@
 #include <llvm/Passes/OptimizationLevel.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/Error.h>
+#include <map>
 #include <memory>
 #include <variant>
 
@@ -28,11 +29,13 @@ struct Expr;
 using ExprHandle = std::shared_ptr<Expr>;
 
 struct Variable {
-  static std::size_t latest_id;
+  static std::map<std::string, std::size_t> latest_id;
   std::size_t id;
   std::size_t factor;
   std::size_t exponent;
-  Variable(std::size_t id, std::size_t factor = 1, std::size_t exponent = 1);
+  std::string letter;
+  Variable(std::size_t id, std::size_t factor = 1, std::size_t exponent = 1,
+           std::string letter = "n");
   Variable(const Variable &variable);
 };
 
@@ -65,8 +68,8 @@ std::ostream &operator<<(std::ostream &os, const ExprHandle expr);
 raw_ostream &operator<<(raw_ostream &os, const ExprHandle expr);
 
 inline ExprHandle var(std::size_t id, std::size_t factor = 1,
-                      std::size_t exponent = 1) {
-  return std::make_shared<Expr>(Variable(id, factor, exponent));
+                      std::size_t exponent = 1, std::string letter = "n") {
+  return std::make_shared<Expr>(Variable(id, factor, exponent, letter));
 }
 
 inline ExprHandle constant(std::size_t value) {
@@ -80,4 +83,5 @@ inline ExprHandle mul(std::vector<ExprHandle> terms) {
 inline ExprHandle add(std::vector<ExprHandle> terms) {
   return reduce(std::make_shared<Expr>(Addition(terms)));
 }
+
 } // namespace EC

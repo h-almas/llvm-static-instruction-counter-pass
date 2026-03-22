@@ -1,5 +1,6 @@
 #include "Expression.hpp"
 #include <algorithm>
+#include <cstddef>
 #include <llvm/Support/Error.h>
 #include <memory>
 #include <sstream>
@@ -10,14 +11,16 @@ using namespace llvm;
 namespace EC {
 // special variable for constants. Only the index being 0 matters, the value has
 // no meaning
-std::size_t Variable::latest_id{0};
+std::map<std::string, std::size_t> Variable::latest_id{{"n", 0}, {"f", 0}};
 
 Expr::Expr(variant base) : variant(std::move(base)) {}
 
-Variable::Variable(std::size_t id, std::size_t factor, std::size_t exponent)
-    : id(id), factor(factor), exponent(exponent) {}
+Variable::Variable(std::size_t id, std::size_t factor, std::size_t exponent,
+                   std::string letter)
+    : id(id), factor(factor), exponent(exponent), letter(letter) {}
 Variable::Variable(const Variable &variable)
-    : id(variable.id), factor(variable.factor), exponent(variable.exponent) {}
+    : id(variable.id), factor(variable.factor), exponent(variable.exponent),
+      letter(variable.letter) {}
 
 Constant::Constant(std::size_t value) : value(value) {}
 Constant::Constant(const Constant &constant) : value(constant.value) {}
@@ -91,7 +94,8 @@ ExprHandle reduce(const ExprHandle expr) {
         if (Variable *var_term = std::get_if<Variable>(it->get())) {
           for (auto jt = it + 1; jt < a.terms.end();) {
             if (Variable *var_term2 = std::get_if<Variable>(jt->get())) {
-              if (var_term->id == var_term2->id &&
+              if (var_term->letter == var_term2->letter &&
+                  var_term->id == var_term2->id &&
                   var_term->exponent == var_term2->exponent) {
                 var_term->factor += var_term2->factor;
                 jt = a.terms.erase(jt);
@@ -131,7 +135,8 @@ ExprHandle reduce(const ExprHandle expr) {
                   for (auto &t2 : mul_term2->terms) {
                     if (Variable *v2 =
                             std::get_if<Variable>(mul_term2->terms[0].get())) {
-                      if (v1->id == v2->id && v1->exponent == v2->exponent) {
+                      if (v1->letter == v2->letter && v1->id == v2->id &&
+                          v1->exponent == v2->exponent) {
                         found_match = true;
                         break;
                       }
@@ -298,7 +303,7 @@ std::string toString(const ExprHandle expr) {
       if (v.factor != 1) {
         oss << v.factor;
       }
-      oss << "n" << v.id;
+      oss << v.letter << v.id;
       if (v.exponent != 1) {
         oss << "^" << v.exponent;
       }
