@@ -21,7 +21,7 @@ clang++ -fpass-plugin=<path-to-pass-plugin.so> -Xclang -disable-O0-optnone examp
 ## Pass Plugins
 
 - InstructionCount: This plugin has an 'instruction-count' pass which currently outputs the count of each instruction per llvm function. The output is a .csv file, per Module, named after the Module's source file and target-triple. The pass can be configured with a 'config.yaml' and can choose an energy model from and 'energy_models' directory. Configuration options of the 'config.yaml' file are:
-- instructions_to_count (takes a sequence of instruction names)
-- energy_model_name (takes a file name of a file in the 'energy_models' directory)
-- verbose (takes a bool value)
-- run_tests (takes a bool value and runs tests for the Expression code)
+  - instructions_to_count (takes a sequence of instruction names)
+  - energy_model_name (takes a file name of a file in the 'energy_models' directory)
+  - verbose (takes a bool value)
+  - run_tests (takes a bool value and runs tests for the Expression code)
