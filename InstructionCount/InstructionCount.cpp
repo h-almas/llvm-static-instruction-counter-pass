@@ -1,4 +1,5 @@
 #include "Expression.hpp"
+#include <algorithm>
 #include <cstddef>
 #include <fstream>
 #include <llvm/Analysis/ScalarEvolution.h>
@@ -21,7 +22,6 @@
 #include <ostream>
 #include <sstream>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 using namespace llvm;
@@ -55,9 +55,7 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
     Function *function;
     std::map<std::string, std::size_t> energy_per_instruction_type{};
     std::map<std::string, ExprHandle> instruction_costs{};
-    std::set<Function *> outgoing_calls{};
     std::map<Function *, ExprHandle> outgoing_calls_costs{};
-    std::set<Function *> outgoing_invokes{};
     std::map<Function *, ExprHandle> outgoing_invokes_costs{};
     ExprHandle recursion_expr = constant(1);
 
@@ -102,9 +100,6 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
     auto bounds_opt = loop->getBounds(SE);
     if (bounds_opt.has_value()) {
       auto bounds = bounds_opt.value();
-      // errs() << "Bounds: " << bounds.getInitialIVValue()
-      //        << " to: " << bounds.getFinalIVValue()
-      //        << " Step: " << bounds.getStepValue() << "\n";
 
       // not ideal solution
       std::string str;
@@ -114,7 +109,6 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
       BTL[os.str()].push_back(loop);
     } else {
       unbounded_loops.push_back(loop);
-      errs() << "Bounds not detected\n";
     }
   }
 
@@ -152,21 +146,10 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
       assignLoopsToLoopBounds(BoTL, unbounded_loops, loop, SE);
     }
 
-    if (!BoTL.empty()) {
-      errs() << "BoTL for " << F.getName() << "\n";
-
-      for (auto &[bounds, loops] : BoTL) {
-        errs() << bounds << "\n";
-      }
-      errs() << "\n";
-    }
-
     // assign variables to the loops
     if (config.verbose)
       errs() << "Assigning vars to the loops:\n";
     for (auto &[bounds, loops] : BoTL) {
-      errs() << "Size: " << loops.size() << "\n";
-      errs() << "Bounds: " << bounds << "\n";
       ExprHandle loop_expr{var(Variable::latest_id["n"]++)};
       for (auto loop : loops) {
         loop_exprs[loop] = loop_expr;
@@ -192,6 +175,12 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
     for (auto &BB : F) {
       for (auto &inst : BB) {
         std::string opcode_name = std::string{inst.getOpcodeName()};
+        auto it = std::find(config.instructions_to_count.begin(),
+                            config.instructions_to_count.end(), opcode_name);
+        if (it == config.instructions_to_count.end()) {
+          continue;
+        }
+
         ExprHandle expr = constant(1);
         if (BlTL.count(&BB)) {
           for (auto loop : BlTL[&BB]) {
@@ -219,17 +208,9 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
             continue;
           }
 
-          result.outgoing_calls.emplace(called_F);
-
           if (result.outgoing_calls_costs.count(called_F)) {
-            if (config.verbose)
-              errs() << "Adding expr: " << expr << " to "
-                     << result.outgoing_calls_costs[called_F] << "\n";
             result.outgoing_calls_costs[called_F] =
                 add({result.outgoing_calls_costs[called_F], expr});
-            if (config.verbose)
-              errs() << "Now it's at: " << result.outgoing_calls_costs[called_F]
-                     << "\n";
           } else {
             result.outgoing_calls_costs[called_F] = expr;
           }
@@ -245,17 +226,9 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
             continue;
           }
 
-          result.outgoing_invokes.emplace(called_F);
-
           if (result.outgoing_invokes_costs.count(called_F)) {
-            if (config.verbose)
-              errs() << "Adding expr: " << expr << " to "
-                     << result.outgoing_invokes_costs[called_F] << "\n";
             result.outgoing_invokes_costs[called_F] =
                 add({result.outgoing_invokes_costs[called_F], expr});
-            if (config.verbose)
-              errs() << "Now it's at: "
-                     << result.outgoing_invokes_costs[called_F] << "\n";
           } else {
             result.outgoing_invokes_costs[called_F] = expr;
           }
@@ -331,16 +304,9 @@ struct ECAccumulationFunctionAnalysis
              << ":\n";
     Result prev_result = getECFunctionAnalysisResult(&F, FAM);
 
-    for (auto *called_F : prev_result.outgoing_calls) {
+    for (auto &[called_F, _] : prev_result.outgoing_calls_costs) {
       if (config.verbose)
         errs() << "For call to function " << called_F->getName() << ":\n";
-      // if (called_F == &F) {
-      //   if (config.verbose)
-      //     errs() << "Skipping a recursion at Function: " <<
-      //     called_F->getName()
-      //            << "\n";
-      //   continue;
-      // }
       if (config.verbose)
         errs() << "Getting result of " << called_F->getName() << "\n";
       Result called_F_result =
@@ -350,16 +316,9 @@ struct ECAccumulationFunctionAnalysis
       doAccumulation(prev_result, called_F_result,
                      prev_result.outgoing_calls_costs[called_F]);
     }
-    for (auto *invoked_F : prev_result.outgoing_invokes) {
+    for (auto &[invoked_F, _] : prev_result.outgoing_invokes_costs) {
       if (config.verbose)
         errs() << "For invoke to function " << invoked_F->getName() << ":\n";
-      // if (invoked_F == &F) {
-      //   if (config.verbose)
-      //     errs() << "Skipping a recursion at Function: " <<
-      //     invoked_F->getName()
-      //            << "\n";
-      //   continue;
-      // }
       if (config.verbose)
         errs() << "Getting its results\n";
       Result invoked_F_result =
@@ -555,8 +514,6 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
   }
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
-    errs() << "Module:\n" << M << "\n";
-
     // read config
     if (!loadConfig()) {
       return PreservedAnalyses::all();
