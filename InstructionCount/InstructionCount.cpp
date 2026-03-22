@@ -117,9 +117,7 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
       assignLoopsToBasicBlocks(BTL, l_inner);
     }
     for (BasicBlock *BB : loop->getBlocks()) {
-      if (BTL.count(BB) == 0) {
-        BTL[BB].push_back(loop);
-      }
+      BTL[BB].push_back(loop);
     }
   }
 
@@ -163,14 +161,6 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
       if (config.verbose)
         errs() << "Added " << loop_exprs[loop] << " to a loop\n";
     }
-    // for (Loop *loop : LI.getLoopsInPreorder()) {
-    //   ExprHandle loop_expr{var(Variable::latest_id["n"]++)};
-    //   // with this every loop gets its own variable, even those that actually
-    //   // share numbers of iteration
-    //   loop_exprs[loop] = std::move(loop_expr);
-    //   if (config.verbose)
-    //     errs() << "Added " << loop_exprs[loop] << " to a loop\n";
-    // }
 
     for (auto &BB : F) {
       for (auto &inst : BB) {
@@ -361,6 +351,13 @@ struct ECModuleAnalysis : public AnalysisInfoMixin<ECModuleAnalysis> {
       }
       result.function_results[&F] =
           FAM.getResult<ECAccumulationFunctionAnalysis>(F);
+    }
+
+    for (auto &F : M) {
+      auto &costs = result.function_results[&F].instruction_costs;
+      for (auto &[inst, cost] : costs) {
+        costs[inst] = mul({cost, constant(energy_model[inst])});
+      }
     }
 
     return result;
@@ -567,15 +564,9 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
 
       for (auto &inst : config.instructions_to_count) {
         if (FR.instruction_costs.count(inst)) {
-
-          ostream << ",(" << FR.instruction_costs.at(inst) << ":";
-          if (FR.energy_per_instruction_type.count(inst)) {
-            ostream << FR.energy_per_instruction_type.at(inst) << ")";
-          } else {
-            ostream << "0)";
-          }
+          ostream << "," << FR.instruction_costs.at(inst);
         } else {
-          ostream << ",(0:0)";
+          ostream << ",0";
         }
       }
       ostream << "\n";
