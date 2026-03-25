@@ -50,7 +50,7 @@ std::map<std::string, std::size_t> energy_model{};
 Config config;
 std::map<Function *, std::size_t> function_variable_ids{};
 
-struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
+struct ICFunctionAnalysis : public AnalysisInfoMixin<ICFunctionAnalysis> {
   struct Result {
     Function *function;
     std::map<std::string, std::size_t> energy_per_instruction_type{};
@@ -228,18 +228,18 @@ struct ECFunctionAnalysis : public AnalysisInfoMixin<ECFunctionAnalysis> {
   }
 };
 
-struct ECAccumulationFunctionAnalysis
-    : public AnalysisInfoMixin<ECAccumulationFunctionAnalysis> {
-  using Result = ECFunctionAnalysis::Result;
+struct ICAggregationFunctionAnalysis
+    : public AnalysisInfoMixin<ICAggregationFunctionAnalysis> {
+  using Result = ICFunctionAnalysis::Result;
 
-  ECFunctionAnalysis::Result
+  ICFunctionAnalysis::Result
   getECFunctionAnalysisResult(Function *F, FunctionAnalysisManager &FAM) {
-    ECFunctionAnalysis::Result *result_ptr =
-        FAM.getCachedResult<ECFunctionAnalysis>(*F);
+    ICFunctionAnalysis::Result *result_ptr =
+        FAM.getCachedResult<ICFunctionAnalysis>(*F);
     if (!result_ptr) {
       errs() << "There was no cached result for Function: " << F->getName()
              << "!\n";
-      return ECFunctionAnalysis::Result();
+      return ICFunctionAnalysis::Result();
     }
     return *result_ptr;
   }
@@ -300,7 +300,7 @@ struct ECAccumulationFunctionAnalysis
       if (config.verbose)
         errs() << "Getting result of " << called_F->getName() << "\n";
       Result called_F_result =
-          FAM.getResult<ECAccumulationFunctionAnalysis>(*called_F);
+          FAM.getResult<ICAggregationFunctionAnalysis>(*called_F);
       if (config.verbose)
         errs() << "Got result of " << called_F->getName() << "\n";
       doAccumulation(prev_result, called_F_result,
@@ -312,7 +312,7 @@ struct ECAccumulationFunctionAnalysis
       if (config.verbose)
         errs() << "Getting its results\n";
       Result invoked_F_result =
-          FAM.getResult<ECAccumulationFunctionAnalysis>(*invoked_F);
+          FAM.getResult<ICAggregationFunctionAnalysis>(*invoked_F);
       if (config.verbose)
         errs() << "Got its results\n";
       doAccumulation(prev_result, invoked_F_result,
@@ -324,9 +324,9 @@ struct ECAccumulationFunctionAnalysis
   static AnalysisKey Key;
 };
 
-struct ECModuleAnalysis : public AnalysisInfoMixin<ECModuleAnalysis> {
+struct ICModuleAnalysis : public AnalysisInfoMixin<ICModuleAnalysis> {
   struct Result {
-    std::map<Function *, ECFunctionAnalysis::Result> function_results{};
+    std::map<Function *, ICFunctionAnalysis::Result> function_results{};
   };
 
   Result run(Module &M, ModuleAnalysisManager &MAM) {
@@ -337,7 +337,7 @@ struct ECModuleAnalysis : public AnalysisInfoMixin<ECModuleAnalysis> {
         MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
 
     for (auto &F : M) {
-      result.function_results[&F] = FAM.getResult<ECFunctionAnalysis>(F);
+      result.function_results[&F] = FAM.getResult<ICFunctionAnalysis>(F);
     }
 
     // ideally I should be building a call graph
@@ -350,14 +350,7 @@ struct ECModuleAnalysis : public AnalysisInfoMixin<ECModuleAnalysis> {
                << "\n";
       }
       result.function_results[&F] =
-          FAM.getResult<ECAccumulationFunctionAnalysis>(F);
-    }
-
-    for (auto &F : M) {
-      auto &costs = result.function_results[&F].instruction_costs;
-      for (auto &[inst, cost] : costs) {
-        costs[inst] = mul({cost, constant(energy_model[inst])});
-      }
+          FAM.getResult<ICAggregationFunctionAnalysis>(F);
     }
 
     return result;
@@ -365,9 +358,9 @@ struct ECModuleAnalysis : public AnalysisInfoMixin<ECModuleAnalysis> {
   static AnalysisKey Key;
 };
 
-AnalysisKey ECFunctionAnalysis::Key;
-AnalysisKey ECAccumulationFunctionAnalysis::Key;
-AnalysisKey ECModuleAnalysis::Key;
+AnalysisKey ICFunctionAnalysis::Key;
+AnalysisKey ICAggregationFunctionAnalysis::Key;
+AnalysisKey ICModuleAnalysis::Key;
 
 struct InstructionCount : PassInfoMixin<InstructionCount> {
 
@@ -523,10 +516,11 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     }
 
     auto &triple = M.getTargetTriple();
-    // if (!(triple.isNVPTX() || triple.isAMDGPU() || triple.isSPIROrSPIRV())) {
-    //   errs() << "Skipping non-device module\n";
-    //   return PreservedAnalyses::all();
-    // }
+    if (!(triple.isNVPTX() || triple.isAMDGPU() || triple.isSPIROrSPIRV())) {
+      if (config.verbose)
+        errs() << "Skipping non-device module\n";
+      return PreservedAnalyses::all();
+    }
     if (config.verbose) {
       errs() << "Analysing a Module with Target Triple: " << triple.getTriple()
              << "\n";
@@ -548,7 +542,14 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     }
     ostream << "\n";
 
-    auto &MR = MAM.getResult<ECModuleAnalysis>(M);
+    auto MR = MAM.getResult<ICModuleAnalysis>(M);
+
+    for (auto &[F, FR] : MR.function_results) {
+      auto &costs = FR.instruction_costs;
+      for (auto &[inst, cost] : costs) {
+        costs[inst] = mul({cost, constant(energy_model[inst])});
+      }
+    }
 
     for (auto &[function, FR] : MR.function_results) {
       if (function->isDeclaration())
@@ -602,11 +603,11 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
 
 void registerPassBuilderCallbacks(PassBuilder &PB) {
   PB.registerAnalysisRegistrationCallback([](FunctionAnalysisManager &FAM) {
-    FAM.registerPass([&] { return ECFunctionAnalysis(); });
-    FAM.registerPass([&] { return ECAccumulationFunctionAnalysis(); });
+    FAM.registerPass([&] { return ICFunctionAnalysis(); });
+    FAM.registerPass([&] { return ICAggregationFunctionAnalysis(); });
   });
   PB.registerAnalysisRegistrationCallback([](ModuleAnalysisManager &MAM) {
-    MAM.registerPass([&] { return ECModuleAnalysis(); });
+    MAM.registerPass([&] { return ICModuleAnalysis(); });
   });
   PB.registerPipelineParsingCallback(
       [](StringRef Name, llvm::FunctionPassManager &FPM,
