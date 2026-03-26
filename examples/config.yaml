@@ -1,4 +1,5 @@
 instructions_to_count: [alloca, load, store, fmul, fadd, mul, add]
-energy_model_name: test_model
+energy_model_name: all_ones
+targets_allowed: [nvptx, amdgpu, x86]
 verbose: false
 run_tests: false

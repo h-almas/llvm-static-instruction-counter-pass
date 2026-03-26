@@ -29,18 +29,65 @@ using llvm::yaml::IO;
 
 struct Config {
   std::vector<std::string> instructions_to_count;
+  std::vector<std::string> targets;
   std::string energy_model_name;
   bool verbose = false;
   bool run_tests = false;
   bool loaded = false;
+
+  bool isTargetValid(const Triple &target) {
+    for (auto &t : targets) {
+      std::string tl{t};
+      std::transform(tl.begin(), tl.end(), tl.begin(), ::tolower);
+      if (tl == "gpu") {
+        if (target.isGPU())
+          return true;
+      } else if (tl == "nvptx") {
+        if (target.isNVPTX())
+          return true;
+      } else if (tl == "amdgpu") {
+        if (target.isAMDGPU())
+          return true;
+      } else if (tl == "spir-v") {
+        if (target.isSPIRV())
+          return true;
+      } else if (tl == "spir") {
+        if (target.isSPIR())
+          return true;
+      } else if (tl == "dxil") {
+        if (target.isDXIL())
+          return true;
+      } else if (tl == "cpu") {
+        if (!target.isGPU())
+          return true;
+      } else if (tl == "riscv") {
+        if (target.isRISCV())
+          return true;
+      } else if (tl == "riscv32") {
+        if (target.isRISCV32())
+          return true;
+      } else if (tl == "riscv64") {
+        if (target.isRISCV64())
+          return true;
+      } else if (tl == "arm") {
+        if (target.isARM())
+          return true;
+      } else if (tl == "x86") {
+        if (target.isX86())
+          return true;
+      }
+    }
+    return false;
+  }
 };
 
 template <> struct llvm::yaml::MappingTraits<Config> {
   static void mapping(IO &io, Config &config) {
     io.mapRequired("energy_model_name", config.energy_model_name);
     io.mapRequired("instructions_to_count", config.instructions_to_count);
-    io.mapOptional("verbose", config.verbose);
-    io.mapOptional("run_tests", config.run_tests);
+    io.mapRequired("targets_allowed", config.targets);
+    io.mapOptional("verbose", config.verbose, false);
+    io.mapOptional("run_tests", config.run_tests, false);
   }
 };
 
@@ -74,13 +121,6 @@ struct ICFunctionAnalysis : public AnalysisInfoMixin<ICFunctionAnalysis> {
     if (F.isDeclaration())
       return result;
     getInstructionCounts(F, FAM, result);
-
-    // for (auto &[k, _] : energy_model) {
-    //   result.energy_per_instruction_type[k] =
-    //       (result.instruction_counts.count(k) ? result.instruction_counts[k]
-    //                                           : 0) *
-    //       energy_model.at(k);
-    // }
 
     return result;
   }
@@ -123,11 +163,6 @@ struct ICFunctionAnalysis : public AnalysisInfoMixin<ICFunctionAnalysis> {
 
   void getInstructionCounts(Function &F, FunctionAnalysisManager &FAM,
                             Result &result) {
-    std::string output{};
-    raw_string_ostream ostream{output};
-
-    std::map<std::string, std::size_t> inst_counts{};
-
     if (config.verbose)
       errs() << "Counting function " << demangle(F.getName()) << "\n";
 
@@ -516,7 +551,7 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     }
 
     auto &triple = M.getTargetTriple();
-    if (!(triple.isNVPTX() || triple.isAMDGPU() || triple.isSPIROrSPIRV())) {
+    if (!config.isTargetValid(triple)) {
       if (config.verbose)
         errs() << "Skipping non-device module\n";
       return PreservedAnalyses::all();
