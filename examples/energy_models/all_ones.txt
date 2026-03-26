@@ -1,0 +1,7 @@
+alloca:1
+load:1
+store: 1
+mul:1
+fmul:1
+add: 1
+fadd: 1

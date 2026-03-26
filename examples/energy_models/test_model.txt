@@ -1,5 +1,6 @@
 alloca:3
 load:6
+store: 4
 mul:10
 fmul:15
 add: 3
