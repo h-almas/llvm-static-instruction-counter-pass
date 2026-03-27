@@ -8,6 +8,7 @@
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instruction.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/Mangler.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Pass.h>
@@ -102,8 +103,9 @@ struct ICFunctionAnalysis : public AnalysisInfoMixin<ICFunctionAnalysis> {
     Function *function;
     std::map<std::string, std::size_t> energy_per_instruction_type{};
     std::map<std::string, ExprHandle> instruction_costs{};
-    std::map<Function *, ExprHandle> outgoing_calls_costs{};
-    std::map<Function *, ExprHandle> outgoing_invokes_costs{};
+    std::map<Function *, ExprHandle>
+        outgoing_calls_costs{}; // counts as both calls and invokes
+    // std::map<Function *, ExprHandle> outgoing_invokes_costs{};
     ExprHandle recursion_expr = constant(1);
 
     std::size_t get_total_energy_consumption() {
@@ -120,7 +122,27 @@ struct ICFunctionAnalysis : public AnalysisInfoMixin<ICFunctionAnalysis> {
     result.function = &F;
     if (F.isDeclaration())
       return result;
-    getInstructionCounts(F, FAM, result);
+
+    if (config.verbose)
+      errs() << "Counting function " << demangle(F.getName()) << "\n";
+
+    BlockToLoops BlTL{};
+    BoundsToLoops BoTL{};
+    std::vector<Loop *> unbounded_loops{};
+
+    std::map<Loop *, ExprHandle> loop_exprs{};
+
+    LoopInfo &LI = FAM.getResult<LoopAnalysis>(F);
+    ScalarEvolution &SE = FAM.getResult<ScalarEvolutionAnalysis>(F);
+    for (Loop *loop : LI) {
+      assignLoopsToBasicBlocks(BlTL, loop);
+      assignLoopsToLoopBounds(BoTL, unbounded_loops, loop, SE);
+    }
+
+    // assign variables to the loops
+    createExpressionsForLoops(BoTL, unbounded_loops, loop_exprs);
+
+    countInstructions(result, loop_exprs, BlTL);
 
     return result;
   }
@@ -129,6 +151,27 @@ struct ICFunctionAnalysis : public AnalysisInfoMixin<ICFunctionAnalysis> {
   using BlockToLoops = std::map<BasicBlock *, std::vector<Loop *>>;
 
   using BoundsToLoops = std::map<std::string, std::vector<Loop *>>;
+
+  void createExpressionsForLoops(const BoundsToLoops &BoTL,
+                                 const std::vector<Loop *> &unbounded_loops,
+                                 std::map<Loop *, ExprHandle> &loop_exprs) {
+    if (config.verbose)
+      errs() << "Assigning vars to the loops:\n";
+    for (auto &[bounds, loops] : BoTL) {
+      ExprHandle loop_expr{var(Variable::latest_id["n"]++)};
+      for (auto loop : loops) {
+        loop_exprs[loop] = loop_expr;
+        if (config.verbose)
+          errs() << "Added " << loop_exprs[loop] << " to a loop\n";
+      }
+    }
+    for (auto *loop : unbounded_loops) {
+      ExprHandle loop_expr{var(Variable::latest_id["n"]++)};
+      loop_exprs[loop] = std::move(loop_expr);
+      if (config.verbose)
+        errs() << "Added " << loop_exprs[loop] << " to a loop\n";
+    }
+  }
 
   void assignLoopsToLoopBounds(BoundsToLoops &BTL,
                                std::vector<Loop *> &unbounded_loops, Loop *loop,
@@ -161,48 +204,18 @@ struct ICFunctionAnalysis : public AnalysisInfoMixin<ICFunctionAnalysis> {
     }
   }
 
-  void getInstructionCounts(Function &F, FunctionAnalysisManager &FAM,
-                            Result &result) {
-    if (config.verbose)
-      errs() << "Counting function " << demangle(F.getName()) << "\n";
+  void countInstructions(Result &result,
+                         std::map<Loop *, ExprHandle> &loop_exprs,
+                         BlockToLoops &BlTL) {
 
-    BlockToLoops BlTL{};
-    BoundsToLoops BoTL{};
-    std::vector<Loop *> unbounded_loops{};
-
-    std::map<Loop *, ExprHandle> loop_exprs{};
-
-    LoopInfo &LI = FAM.getResult<LoopAnalysis>(F);
-    ScalarEvolution &SE = FAM.getResult<ScalarEvolutionAnalysis>(F);
-    for (Loop *loop : LI) {
-      assignLoopsToBasicBlocks(BlTL, loop);
-      assignLoopsToLoopBounds(BoTL, unbounded_loops, loop, SE);
-    }
-
-    // assign variables to the loops
-    if (config.verbose)
-      errs() << "Assigning vars to the loops:\n";
-    for (auto &[bounds, loops] : BoTL) {
-      ExprHandle loop_expr{var(Variable::latest_id["n"]++)};
-      for (auto loop : loops) {
-        loop_exprs[loop] = loop_expr;
-        if (config.verbose)
-          errs() << "Added " << loop_exprs[loop] << " to a loop\n";
-      }
-    }
-    for (auto *loop : unbounded_loops) {
-      ExprHandle loop_expr{var(Variable::latest_id["n"]++)};
-      loop_exprs[loop] = std::move(loop_expr);
-      if (config.verbose)
-        errs() << "Added " << loop_exprs[loop] << " to a loop\n";
-    }
-
-    for (auto &BB : F) {
+    for (auto &BB : *result.function) {
       for (auto &inst : BB) {
         std::string opcode_name = std::string{inst.getOpcodeName()};
         auto it = std::find(config.instructions_to_count.begin(),
                             config.instructions_to_count.end(), opcode_name);
-        if (it == config.instructions_to_count.end()) {
+        bool dontCount = it == config.instructions_to_count.end();
+        bool isCallOrInvoke = isa<CallInst, InvokeInst>(inst);
+        if (dontCount && !isCallOrInvoke) {
           continue;
         }
 
@@ -212,24 +225,30 @@ struct ICFunctionAnalysis : public AnalysisInfoMixin<ICFunctionAnalysis> {
             expr = mul({loop_exprs[loop], expr});
           }
         }
-        if (result.instruction_costs.count(opcode_name)) {
-          result.instruction_costs[opcode_name] =
-              add({result.instruction_costs[opcode_name], expr});
+        if (!dontCount) {
+          if (result.instruction_costs.count(opcode_name)) {
+            result.instruction_costs[opcode_name] =
+                add({result.instruction_costs[opcode_name], expr});
 
-        } else {
-          result.instruction_costs[opcode_name] = expr;
+          } else {
+            result.instruction_costs[opcode_name] = expr;
+          }
         }
 
-        Function *called_F = nullptr;
-        if (isa<CallInst>(inst)) {
-          called_F = cast<CallInst>(inst).getCalledFunction();
+        if (isCallOrInvoke) {
+          Function *called_F = nullptr;
+          if (isa<CallInst>(inst)) {
+            called_F = cast<CallInst>(inst).getCalledFunction();
+          } else if (isa<InvokeInst>(inst)) {
+            called_F = cast<InvokeInst>(inst).getCalledFunction();
+          }
+
           if (!called_F)
-            continue;           // in case it's null
-          if (called_F == &F) { // if it's a recursion
+            continue;                        // in case it's null
+          if (called_F == result.function) { // if it's a recursion
             result.recursion_expr =
                 add({result.recursion_expr,
                      mul({expr, var(Variable::latest_id["n"]++)})});
-
             continue;
           }
 
@@ -238,24 +257,6 @@ struct ICFunctionAnalysis : public AnalysisInfoMixin<ICFunctionAnalysis> {
                 add({result.outgoing_calls_costs[called_F], expr});
           } else {
             result.outgoing_calls_costs[called_F] = expr;
-          }
-        } else if (isa<InvokeInst>(inst)) {
-          called_F = cast<InvokeInst>(inst).getCalledFunction();
-          if (!called_F)
-            continue;           // in case it's null
-          if (called_F == &F) { // if it's a recursion
-            result.recursion_expr =
-                add({result.recursion_expr,
-                     mul({expr, var(Variable::latest_id["n"]++)})});
-
-            continue;
-          }
-
-          if (result.outgoing_invokes_costs.count(called_F)) {
-            result.outgoing_invokes_costs[called_F] =
-                add({result.outgoing_invokes_costs[called_F], expr});
-          } else {
-            result.outgoing_invokes_costs[called_F] = expr;
           }
         }
       }
@@ -284,7 +285,7 @@ struct ICAggregationFunctionAnalysis
     for (auto &[k, v] : called_result.instruction_costs) {
       if (Constant *c = std::get_if<Constant>(v.get())) {
         if (c->value == 0) {
-          return;
+          continue;
         }
       } else {
         std::size_t id;
@@ -294,14 +295,14 @@ struct ICAggregationFunctionAnalysis
           id = Variable::latest_id["f"]++;
           function_variable_ids[called_result.function] = id;
         }
+        ExprHandle expr =
+            mul({called_result.recursion_expr, call_expr, var(id, 1, 1, "f")});
+
         if (prev_result.instruction_costs.count(k)) {
           prev_result.instruction_costs[k] =
-              add({prev_result.instruction_costs[k],
-                   mul({called_result.recursion_expr, call_expr,
-                        var(id, 1, 1, "f")})});
+              add({prev_result.instruction_costs[k], expr});
         } else {
-          prev_result.instruction_costs[k] = mul(
-              {called_result.recursion_expr, call_expr, var(id, 1, 1, "f")});
+          prev_result.instruction_costs[k] = expr;
         }
       }
       // if (config.verbose)
@@ -340,18 +341,6 @@ struct ICAggregationFunctionAnalysis
         errs() << "Got result of " << called_F->getName() << "\n";
       doAccumulation(prev_result, called_F_result,
                      prev_result.outgoing_calls_costs[called_F]);
-    }
-    for (auto &[invoked_F, _] : prev_result.outgoing_invokes_costs) {
-      if (config.verbose)
-        errs() << "For invoke to function " << invoked_F->getName() << ":\n";
-      if (config.verbose)
-        errs() << "Getting its results\n";
-      Result invoked_F_result =
-          FAM.getResult<ICAggregationFunctionAnalysis>(*invoked_F);
-      if (config.verbose)
-        errs() << "Got its results\n";
-      doAccumulation(prev_result, invoked_F_result,
-                     prev_result.outgoing_invokes_costs[invoked_F]);
     }
 
     return prev_result;
