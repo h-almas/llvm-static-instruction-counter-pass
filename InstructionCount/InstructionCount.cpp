@@ -536,6 +536,13 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       run_test("mul 0", toString(mul({m1, constant(0)})), "0");
       run_test("m1 unchanged", toString(m1), "42n0+(42n0*n1)");
     }
+
+    {
+      ExprHandle n0 = var(0);
+      ExprHandle n0p2 = var(0, 3, 2);
+      ExprHandle m0 = mul({n0p2, n0});
+      run_test("multiplying same variable", toString(m0), "3n0^3");
+    }
   }
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {

@@ -49,12 +49,14 @@ ExprHandle reduce(const ExprHandle expr) {
     }
 
     ExprHandle operator()(Addition &a) const {
-      if (a.terms.size() == 1) {
-        return a.terms[0];
-      }
       for (auto &term : a.terms) {
         term = reduce(term);
       }
+
+      if (a.terms.size() == 0)
+        return constant(0);
+      if (a.terms.size() == 1)
+        return a.terms[0];
 
       // partition the vector into non-additions and additions
       auto part_it = std::partition(
@@ -70,7 +72,7 @@ ExprHandle reduce(const ExprHandle expr) {
       }
       to_add.clear();
 
-      // idea: find first constant and just add everything on it
+      // find first constant and just add everything on it
       for (auto it = a.terms.begin(); it < a.terms.end(); it++) {
         if (Constant *const_term = std::get_if<Constant>(it->get())) {
           for (auto jt = it + 1; jt < a.terms.end();) {
@@ -88,6 +90,8 @@ ExprHandle reduce(const ExprHandle expr) {
           break;
         }
       }
+      if (a.terms.size() == 1)
+        return a.terms[0];
 
       // adding single variables up
       for (auto it = a.terms.begin(); it < a.terms.end(); it++) {
@@ -114,7 +118,6 @@ ExprHandle reduce(const ExprHandle expr) {
       }
 
       // adding multiplications with same variables up
-
       for (auto it = a.terms.begin(); it < a.terms.end(); it++) {
         if (Multiplication *mul_term = std::get_if<Multiplication>(it->get())) {
           for (auto jt = it + 1; jt < a.terms.end();) {
@@ -248,6 +251,26 @@ ExprHandle reduce(const ExprHandle expr) {
             if (Variable *v2 = std::get_if<Variable>(jt->get())) {
               v1->factor *= v2->factor;
               v2->factor = 1;
+            }
+          }
+        }
+      }
+
+      // multiplying single variables up
+      for (auto it = m.terms.begin(); it < m.terms.end(); it++) {
+        if (Variable *var_term = std::get_if<Variable>(it->get())) {
+          for (auto jt = it + 1; jt < m.terms.end();) {
+            if (Variable *var_term2 = std::get_if<Variable>(jt->get())) {
+              if (var_term->letter == var_term2->letter &&
+                  var_term->id == var_term2->id) {
+                var_term->factor *= var_term2->factor;
+                var_term->exponent += var_term2->exponent;
+                jt = m.terms.erase(jt);
+              } else {
+                jt++;
+              }
+            } else {
+              jt++;
             }
           }
         }
