@@ -101,20 +101,11 @@ std::map<Function *, std::size_t> function_variable_ids{};
 struct ICFunctionAnalysis : public AnalysisInfoMixin<ICFunctionAnalysis> {
   struct Result {
     Function *function;
-    std::map<std::string, std::size_t> energy_per_instruction_type{};
     std::map<std::string, ExprHandle> instruction_costs{};
     std::map<Function *, ExprHandle>
         outgoing_calls_costs{}; // counts as both calls and invokes
     // std::map<Function *, ExprHandle> outgoing_invokes_costs{};
     ExprHandle recursion_expr = constant(1);
-
-    std::size_t get_total_energy_consumption() {
-      std::size_t sum{};
-      for (auto &p : energy_per_instruction_type) {
-        sum += p.second;
-      }
-      return sum;
-    }
   };
 
   Result run(Function &F, FunctionAnalysisManager &FAM) {
