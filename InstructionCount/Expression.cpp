@@ -1,7 +1,6 @@
 #include "Expression.hpp"
 #include <algorithm>
 #include <cstddef>
-#include <llvm/Support/Error.h>
 #include <memory>
 #include <sstream>
 #include <variant>
@@ -312,6 +311,62 @@ ExprHandle reduce(const ExprHandle expr) {
     }
   };
   return std::visit(Reducer{}, *expr);
+}
+
+ExprHandle substituteRecursionVariables(const ExprHandle expr) {
+  struct RecursionVarSubstituter {
+    ExprHandle operator()(Constant &c) const {
+      return std::make_shared<Expr>(c);
+    }
+    ExprHandle operator()(Variable &v) const {
+      if (v.letter == "r") {
+        Variable v_new(Variable::latest_id["n"]++, v.factor, v.exponent, "n");
+        return std::make_shared<Expr>(v_new);
+      }
+      return std::make_shared<Expr>(v);
+    }
+    ExprHandle operator()(Addition &a) const {
+      for (auto &term : a.terms) {
+        term = substituteRecursionVariables(term);
+      }
+      return std::make_shared<Expr>(a);
+    }
+    ExprHandle operator()(Multiplication &m) const {
+      for (auto &term : m.terms) {
+        term = substituteRecursionVariables(term);
+      }
+      return std::make_shared<Expr>(m);
+    }
+  };
+  ExprHandle copy = cloneExpression(expr);
+  return std::visit(RecursionVarSubstituter{}, *copy);
+}
+
+ExprHandle cloneExpression(const ExprHandle expr) {
+  struct ExpressionCloner {
+    ExprHandle operator()(const Constant &c) const {
+      return std::make_shared<Expr>(c);
+    }
+    ExprHandle operator()(const Variable &v) const {
+      return std::make_shared<Expr>(v);
+    }
+    ExprHandle operator()(const Addition &a) const {
+      Addition a_new = Addition(a);
+      for (auto &term : a_new.terms) {
+        term = substituteRecursionVariables(term);
+      }
+      return std::make_shared<Expr>(a_new);
+    }
+    ExprHandle operator()(const Multiplication &m) const {
+      Multiplication m_new = Multiplication(m);
+      for (auto &term : m_new.terms) {
+        term = substituteRecursionVariables(term);
+      }
+      return std::make_shared<Expr>(m_new);
+    }
+  };
+
+  return std::visit(ExpressionCloner{}, *expr);
 }
 
 std::string toString(const ExprHandle expr) {

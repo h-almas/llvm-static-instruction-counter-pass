@@ -239,7 +239,7 @@ struct ICFunctionAnalysis : public AnalysisInfoMixin<ICFunctionAnalysis> {
           if (called_F == result.function) { // if it's a recursion
             result.recursion_expr =
                 add({result.recursion_expr,
-                     mul({expr, var(Variable::latest_id["n"]++)})});
+                     mul({expr, var(Variable::latest_id["r"]++)})});
             continue;
           }
 
@@ -522,6 +522,30 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       ExprHandle n0p2 = var(0, 3, 2);
       ExprHandle m0 = mul({n0p2, n0});
       run_test("multiplying same variable", toString(m0), "3n0^3");
+    }
+    {
+      Variable::latest_id = {};
+      ExprHandle r0 = var(Variable::latest_id["r"]++, 1, 1, "r");
+      ExprHandle n0 = var(Variable::latest_id["n"]++);
+
+      ExprHandle m0 = mul({r0, n0});
+      ExprHandle a0 = add({m0, n0});
+      ExprHandle t0 = substituteRecursionVariables(r0);
+      run_test("original variable unchanged after substitute 1", toString(r0),
+               "r0");
+      run_test("substituted variable", toString(t0), "n1");
+      ExprHandle t1 = substituteRecursionVariables(m0);
+      run_test("original variable unchanged after substitute 2", toString(r0),
+               "r0");
+      run_test("original multiplication unchanged after substitute",
+               toString(m0), "r0*n0");
+      run_test("substituted variable in multiplication", toString(t1), "n2*n0");
+      ExprHandle t2 = substituteRecursionVariables(a0);
+      run_test("original variable unchanged after substitute 3", toString(r0),
+               "r0");
+      run_test("original addition unchanged after substitute", toString(a0),
+               "(r0*n0)+n0");
+      run_test("substituted variable in addition", toString(t2), "(n3*n0)+n0");
     }
   }
 

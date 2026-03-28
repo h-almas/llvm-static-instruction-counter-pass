@@ -64,6 +64,8 @@ struct Expr : std::variant<Variable, Constant, Addition, Multiplication> {
 
 std::string toString(const ExprHandle expr);
 ExprHandle reduce(const ExprHandle expr);
+ExprHandle substituteRecursionVariables(ExprHandle expr);
+ExprHandle cloneExpression(const ExprHandle expr);
 std::ostream &operator<<(std::ostream &os, const ExprHandle expr);
 raw_ostream &operator<<(raw_ostream &os, const ExprHandle expr);
 
