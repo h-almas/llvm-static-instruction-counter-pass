@@ -1,6 +1,7 @@
 #include "Expression.hpp"
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <fstream>
 #include <llvm/Analysis/ScalarEvolution.h>
 #include <llvm/Demangle/Demangle.h>
@@ -32,6 +33,7 @@ struct Config {
   std::vector<std::string> instructions_to_count;
   std::vector<std::string> targets;
   std::string energy_model_name;
+  std::size_t aggregate_level = 2;
   bool verbose = false;
   bool run_tests = false;
   bool loaded = false;
@@ -286,8 +288,21 @@ struct ICAggregationFunctionAnalysis
           id = Variable::latest_id["f"]++;
           function_variable_ids[called_result.function] = id;
         }
-        ExprHandle expr =
-            mul({called_result.recursion_expr, call_expr, var(id, 1, 1, "f")});
+        ExprHandle expr_base =
+            mul({substituteRecursionVariables(called_result.recursion_expr),
+                 call_expr});
+        ExprHandle expr_actual;
+        if (config.aggregate_level == 0) {
+          expr_actual = var(id, 1, 1, "f");
+        } else if (config.aggregate_level == 1) {
+          if (Constant *c = std::get_if<Constant>(v.get())) {
+            expr_actual = std::make_shared<Expr>(*c);
+          }
+        } else if (config.aggregate_level == 2) {
+          expr_actual = v;
+        }
+
+        ExprHandle expr = mul({expr_base, expr_actual});
 
         if (prev_result.instruction_costs.count(k)) {
           prev_result.instruction_costs[k] =
