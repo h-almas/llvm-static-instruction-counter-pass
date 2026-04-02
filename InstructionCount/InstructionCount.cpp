@@ -405,7 +405,12 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
   bool loadConfig() {
     if (!config.loaded) {
 
-      std::string config_file_path{"./config.yaml"};
+      auto icconfig_result = std::getenv("IC_CONFIG");
+      std::string base_directory{"."};
+      if (icconfig_result) {
+        base_directory = icconfig_result;
+      }
+      std::string config_file_path{base_directory + "/config.yaml"};
 
       ErrorOr<std::unique_ptr<MemoryBuffer>> mb =
           MemoryBuffer::getFile(config_file_path);
@@ -433,7 +438,7 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       // errs() << "Chosen energy model: " << config.energy_model_name << "\n";
       // load energy model:
       std::ifstream energy_model_file;
-      std::string energy_model_dir_path = "./energy_models/";
+      std::string energy_model_dir_path = base_directory + "/energy_models/";
       std::string energy_model_file_path =
           energy_model_dir_path + config.energy_model_name + ".txt";
 
