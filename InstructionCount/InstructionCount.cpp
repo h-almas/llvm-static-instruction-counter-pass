@@ -92,7 +92,7 @@ template <> struct llvm::yaml::MappingTraits<Config> {
   }
 };
 
-namespace EC {
+namespace IC {
 
 std::map<std::string, std::size_t> energy_model{};
 Config config;
@@ -271,8 +271,8 @@ struct ICAggregationFunctionAnalysis
     return *result_ptr;
   }
 
-  void doAccumulation(Result &prev_result, Result &called_result,
-                      ExprHandle call_expr) {
+  void doAggregation(Result &prev_result, Result &called_result,
+                     ExprHandle call_expr) {
     for (auto &[k, v] : called_result.instruction_costs) {
       if (Constant *c = std::get_if<Constant>(v.get())) {
         if (c->value == 0) {
@@ -330,8 +330,8 @@ struct ICAggregationFunctionAnalysis
           FAM.getResult<ICAggregationFunctionAnalysis>(*called_F);
       if (config.verbose)
         errs() << "Got result of " << called_F->getName() << "\n";
-      doAccumulation(prev_result, called_F_result,
-                     prev_result.outgoing_calls_costs[called_F]);
+      doAggregation(prev_result, called_F_result,
+                    prev_result.outgoing_calls_costs[called_F]);
     }
 
     return prev_result;
@@ -644,7 +644,7 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     return PreservedAnalyses::all();
   }
 
-  // static bool isRequired() { return true; }
+  static bool isRequired() { return true; }
 };
 
 void registerPassBuilderCallbacks(PassBuilder &PB) {
@@ -656,10 +656,10 @@ void registerPassBuilderCallbacks(PassBuilder &PB) {
     MAM.registerPass([&] { return ICModuleAnalysis(); });
   });
   PB.registerPipelineParsingCallback(
-      [](StringRef Name, llvm::FunctionPassManager &FPM,
+      [](StringRef Name, llvm::ModulePassManager &MPM,
          ArrayRef<llvm::PassBuilder::PipelineElement>) {
         if (Name == "instruction-count") {
-          FPM.addPass(InstructionCount());
+          MPM.addPass(InstructionCount());
           return true;
         }
         return false;
@@ -677,12 +677,12 @@ void registerPassBuilderCallbacks(PassBuilder &PB) {
   });
 }
 
-} // namespace EC
+} // namespace IC
 
 /* New PM Registration */
 llvm::PassPluginLibraryInfo getInstructionCountPluginInfo() {
   return {LLVM_PLUGIN_API_VERSION, "InstructionCount", LLVM_VERSION_STRING,
-          EC::registerPassBuilderCallbacks};
+          IC::registerPassBuilderCallbacks};
 }
 
 extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo

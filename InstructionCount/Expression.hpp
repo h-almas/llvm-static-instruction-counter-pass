@@ -18,7 +18,7 @@
 
 using namespace llvm;
 
-namespace EC {
+namespace IC {
 
 struct Variable;
 struct Constant;
@@ -86,4 +86,4 @@ inline ExprHandle add(std::vector<ExprHandle> terms) {
   return reduce(std::make_shared<Expr>(Addition(terms)));
 }
 
-} // namespace EC
+} // namespace IC

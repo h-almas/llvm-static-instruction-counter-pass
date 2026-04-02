@@ -7,7 +7,7 @@
 
 using namespace llvm;
 
-namespace EC {
+namespace IC {
 // special variable for constants. Only the index being 0 matters, the value has
 // no meaning
 std::map<std::string, std::size_t> Variable::latest_id{{"n", 0}, {"f", 0}};
@@ -435,4 +435,4 @@ raw_ostream &operator<<(raw_ostream &os, const ExprHandle expr) {
   return os;
 }
 
-} // namespace EC
+} // namespace IC
