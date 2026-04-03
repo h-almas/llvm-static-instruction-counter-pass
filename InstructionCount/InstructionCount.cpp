@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Analysis/ScalarEvolution.h>
 #include <llvm/Demangle/Demangle.h>
@@ -108,13 +109,19 @@ template <> struct llvm::yaml::MappingTraits<IC::Config> {
 
 template <> struct yaml::ScalarEnumerationTraits<IC::Config::AggregationLevel> {
   static void enumeration(IO &io, IC::Config::AggregationLevel &value) {
-    io.enumCase(value, "FID", IC::Config::FID);
-    io.enumCase(value, "Constants", IC::Config::Constants);
-    io.enumCase(value, "All", IC::Config::All);
+    io.enumCase(value, "fid", IC::Config::FID);
+    io.enumCase(value, "constants", IC::Config::Constants);
+    io.enumCase(value, "all", IC::Config::All);
   }
 };
 
 namespace IC {
+
+struct FunctionPointerComparator {
+  bool operator()(const Function *lhs, const Function *rhs) const {
+    return lhs->getName() < rhs->getName();
+  }
+};
 
 std::map<std::string, std::size_t> energy_model{};
 Config config;
@@ -361,30 +368,39 @@ struct ICAggregationFunctionAnalysis
 
 struct ICModuleAnalysis : public AnalysisInfoMixin<ICModuleAnalysis> {
   struct Result {
-    std::map<Function *, ICFunctionAnalysis::Result> function_results{};
+    std::map<Function *, ICFunctionAnalysis::Result, FunctionPointerComparator>
+        function_results{};
   };
 
   Result run(Module &M, ModuleAnalysisManager &MAM) {
+
+    std::vector<Function *> functions_sorted;
+    for (auto &F : M) {
+      functions_sorted.push_back(&F);
+    }
+    llvm::sort(
+        functions_sorted.begin(), functions_sorted.end(),
+        [](Function *a, Function *b) { return a->getName() < b->getName(); });
 
     Result result;
     FunctionAnalysisManager &FAM =
         MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
 
-    for (auto &F : M) {
+    for (auto F : functions_sorted) {
       if (config.verbose) {
-        errs() << "Running ICAggregationFunctionAnalysis for " << F.getName()
+        errs() << "Running ICAggregationFunctionAnalysis for " << F->getName()
                << "\n";
       }
-      result.function_results[&F] = FAM.getResult<ICFunctionAnalysis>(F);
+      result.function_results[F] = FAM.getResult<ICFunctionAnalysis>(*F);
     }
 
-    for (auto &F : M) {
+    for (auto F : functions_sorted) {
       if (config.verbose) {
-        errs() << "Running ICAggregationFunctionAnalysis for " << F.getName()
+        errs() << "Running ICAggregationFunctionAnalysis for " << F->getName()
                << "\n";
       }
-      result.function_results[&F] =
-          FAM.getResult<ICAggregationFunctionAnalysis>(F);
+      result.function_results[F] =
+          FAM.getResult<ICAggregationFunctionAnalysis>(*F);
     }
 
     return result;
