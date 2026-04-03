@@ -296,15 +296,13 @@ struct ICAggregationFunctionAnalysis
         ExprHandle expr_base =
             mul({substituteRecursionVariables(called_result.recursion_expr),
                  call_expr});
-        ExprHandle expr_actual;
+        ExprHandle expr_actual = v;
         if (config.aggregate_level == 0) {
           expr_actual = var(id, 1, 1, "f");
         } else if (config.aggregate_level == 1) {
           if (Constant *c = std::get_if<Constant>(v.get())) {
             expr_actual = std::make_shared<Expr>(*c);
           }
-        } else if (config.aggregate_level == 2) {
-          expr_actual = v;
         }
 
         ExprHandle expr = mul({expr_base, expr_actual});
