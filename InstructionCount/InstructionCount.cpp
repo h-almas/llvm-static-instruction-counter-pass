@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <llvm/ADT/StringRef.h>
 #include <llvm/Analysis/ScalarEvolution.h>
 #include <llvm/Demangle/Demangle.h>
 #include <llvm/IR/Analysis.h>
@@ -425,29 +426,28 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       if (!energy_model_file.is_open()) {
         errs() << "Error opening energy model file at "
                << energy_model_file_path << "\n";
-        errs() << "Exiting pass early\n";
         return false;
       }
 
       std::ostringstream osstr;
       osstr << energy_model_file.rdbuf();
+      energy_model_file.close();
       std::string energy_model_contents = osstr.str();
       // errs() << "Energy model file contents:\n" << energy_model_contents <<
       // "\n";
 
-      energy_model_file.close();
-
       std::string line;
       std::istringstream isstr{energy_model_contents};
       while (std::getline(isstr, line)) {
-        std::size_t colon_pos = line.find(":", 0);
+        StringRef lineref = line;
+        std::size_t colon_pos = lineref.find(":", 0);
         if (colon_pos == std::string::npos) {
           errs() << "Line \"" << line << "\" in energy model file at "
                  << energy_model_file_path << " is malformed. Skipping\n";
           continue;
         }
-        std::string instruction_name = line.substr(0, colon_pos);
-        std::string energy_usage_str = line.substr(colon_pos + 1);
+        StringRef instruction_name = lineref.substr(0, colon_pos).trim();
+        StringRef energy_usage_str = lineref.substr(colon_pos + 1).trim();
         if (energy_usage_str.empty()) {
           errs() << "Line \"" << line << "\" in energy model file at "
                  << energy_model_file_path << "is malformed. Skipping\n";
@@ -465,7 +465,7 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
         // errs() << "inst name: " << instruction_name
         //        << " energy usage: " << energy_usage << "\n";
 
-        energy_model[instruction_name] = energy_usage;
+        energy_model[instruction_name.str()] = energy_usage;
       }
       config.loaded = true;
     }
@@ -627,8 +627,6 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       };
     }
     file_path /= output_filename;
-
-    errs() << file_path << "\n";
 
     csv_file.open(file_path);
     if (!csv_file.is_open()) {
