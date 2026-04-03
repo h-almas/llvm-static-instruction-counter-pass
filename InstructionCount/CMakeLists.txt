@@ -8,6 +8,8 @@ project(instruction-count-pass)
 #===============================================================================
 # Set this to a valid LLVM installation dir
 # set(LLVM_INSTALL_DIR "" CACHE PATH "LLVM installation directory")
+# If not set, rocm's llvm cmake may get priority
+set(LLVM_DIR "${LLVM_INSTALL_DIR}/lib/cmake" CACHE PATH "LLVM installation directory")
 
 # Add the location of LLVMConfig.cmake to CMake search paths (so that
 # find_package can locate it)
@@ -30,7 +32,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # LLVM is normally built without RTTI. Be consistent with that.
 if(NOT LLVM_ENABLE_RTTI)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti -g")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti")
 endif()
 
 #===============================================================================
