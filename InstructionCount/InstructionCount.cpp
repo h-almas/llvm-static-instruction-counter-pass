@@ -378,9 +378,8 @@ struct ICModuleAnalysis : public AnalysisInfoMixin<ICModuleAnalysis> {
     for (auto &F : M) {
       functions_sorted.push_back(&F);
     }
-    llvm::sort(
-        functions_sorted.begin(), functions_sorted.end(),
-        [](Function *a, Function *b) { return a->getName() < b->getName(); });
+    llvm::sort(functions_sorted.begin(), functions_sorted.end(),
+               FunctionPointerComparator());
 
     Result result;
     FunctionAnalysisManager &FAM =
