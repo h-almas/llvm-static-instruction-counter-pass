@@ -29,6 +29,7 @@
 using namespace llvm;
 using llvm::yaml::IO;
 
+namespace IC {
 struct Config {
   std::vector<std::string> instructions_to_count;
   std::vector<std::string> targets;
@@ -83,9 +84,10 @@ struct Config {
     return false;
   }
 };
+}; // namespace IC
 
-template <> struct llvm::yaml::MappingTraits<Config> {
-  static void mapping(IO &io, Config &config) {
+template <> struct llvm::yaml::MappingTraits<IC::Config> {
+  static void mapping(IO &io, IC::Config &config) {
     io.mapRequired("energy_model_name", config.energy_model_name);
     io.mapRequired("instructions_to_count", config.instructions_to_count);
     io.mapRequired("targets_allowed", config.targets);
