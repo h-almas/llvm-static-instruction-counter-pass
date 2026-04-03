@@ -319,6 +319,8 @@ struct ICAggregationFunctionAnalysis
   }
 
   Result run(Function &F, FunctionAnalysisManager &FAM) {
+    function_variable_ids[&F] = Variable::latest_id["f"]++;
+
     if (config.verbose)
       errs() << "In ICAggregationFunctionAnalysis for " << F.getName() << ":\n";
     Result prev_result = getICFunctionAnalysisResult(&F, FAM);
@@ -666,9 +668,9 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     if (config.verbose)
       errs() << "Running analysis for Module " << M.getName() << "\n";
 
-    for (auto &F : M) {
-      function_variable_ids[&F] = Variable::latest_id["f"]++;
-    }
+    // for (auto &F : M) {
+    //   function_variable_ids[&F] = Variable::latest_id["f"]++;
+    // }
 
     auto MR = MAM.getResult<ICModuleAnalysis>(M);
 
