@@ -33,10 +33,16 @@ using llvm::yaml::IO;
 
 namespace IC {
 struct Config {
+  enum AggregationLevel {
+    FID,
+    Constants,
+    All,
+  };
+
   std::vector<std::string> instructions_to_count;
   std::vector<std::string> targets;
   std::string energy_model_name;
-  std::size_t aggregate_level = 2;
+  AggregationLevel aggregate_level;
   bool verbose = false;
   bool run_tests = false;
   bool loaded = false;
@@ -93,8 +99,18 @@ template <> struct llvm::yaml::MappingTraits<IC::Config> {
     io.mapRequired("energy_model_name", config.energy_model_name);
     io.mapRequired("instructions_to_count", config.instructions_to_count);
     io.mapRequired("targets_allowed", config.targets);
+    io.mapOptional("aggregation_level", config.aggregate_level,
+                   IC::Config::FID);
     io.mapOptional("verbose", config.verbose, false);
     io.mapOptional("run_tests", config.run_tests, false);
+  }
+};
+
+template <> struct yaml::ScalarEnumerationTraits<IC::Config::AggregationLevel> {
+  static void enumeration(IO &io, IC::Config::AggregationLevel &value) {
+    io.enumCase(value, "FID", IC::Config::FID);
+    io.enumCase(value, "Constants", IC::Config::Constants);
+    io.enumCase(value, "All", IC::Config::All);
   }
 };
 
@@ -299,9 +315,9 @@ struct ICAggregationFunctionAnalysis
             mul({substituteRecursionVariables(called_result.recursion_expr),
                  call_expr});
         ExprHandle expr_actual = v;
-        if (config.aggregate_level == 0) {
+        if (config.aggregate_level == Config::FID) {
           expr_actual = var(id, 1, 1, "f");
-        } else if (config.aggregate_level == 1) {
+        } else if (config.aggregate_level == Config::Constants) {
           if (Constant *c = std::get_if<Constant>(v.get())) {
             expr_actual = std::make_shared<Expr>(*c);
           }
