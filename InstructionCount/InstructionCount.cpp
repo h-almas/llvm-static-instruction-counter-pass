@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <llvm/Analysis/ScalarEvolution.h>
 #include <llvm/Demangle/Demangle.h>
@@ -380,12 +381,12 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
   bool loadConfig() {
     if (!config.loaded) {
 
-      auto icconfig_result = std::getenv("IC_CONFIG");
-      std::string base_directory{"."};
+      std::filesystem::path base_directory{"."};
+      auto icconfig_result = std::getenv("IC_CONFIG_DIR");
       if (icconfig_result) {
         base_directory = icconfig_result;
       }
-      std::string config_file_path{base_directory + "/config.yaml"};
+      std::string config_file_path{base_directory / "config.yaml"};
 
       ErrorOr<std::unique_ptr<MemoryBuffer>> mb =
           MemoryBuffer::getFile(config_file_path);
@@ -413,9 +414,10 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       // errs() << "Chosen energy model: " << config.energy_model_name << "\n";
       // load energy model:
       std::ifstream energy_model_file;
-      std::string energy_model_dir_path = base_directory + "/energy_models/";
-      std::string energy_model_file_path =
-          energy_model_dir_path + config.energy_model_name + ".txt";
+      std::filesystem::path energy_model_dir_path =
+          base_directory / "energy_models";
+      std::filesystem::path energy_model_file_path =
+          energy_model_dir_path / (config.energy_model_name + ".txt");
 
       energy_model_file.open(energy_model_file_path);
       if (!energy_model_file.is_open()) {
@@ -449,7 +451,15 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
                  << energy_model_file_path << "is malformed. Skipping\n";
           continue;
         }
-        std::size_t energy_usage = std::stoull(energy_usage_str);
+        std::size_t energy_usage;
+        if (!llvm::to_integer<std::size_t>(StringRef(energy_usage_str).trim(),
+                                           energy_usage)) {
+          errs() << "Error while parsing line: \"" << line << "\" in "
+                 << energy_model_file_path << "\n";
+          return false;
+        };
+
+        // std::size_t energy_usage = (energy_usage_str);
         // errs() << "inst name: " << instruction_name
         //        << " energy usage: " << energy_usage << "\n";
 
@@ -594,19 +604,36 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
 
     std::ofstream csv_file{};
 
-    std::string output_content;
-    raw_string_ostream os(output_content);
-    os << M.getName() << "-" << M.getTargetTriple().getTriple() << ".csv";
-    csv_file.open(os.str());
+    std::filesystem::path file_path("./output");
+
+    std::string output_filename;
+    raw_string_ostream ofn(output_filename);
+    std::filesystem::path source_file_path = M.getSourceFileName();
+    source_file_path.end();
+    ofn << source_file_path.filename() << "-" << M.getTargetTriple().getTriple()
+        << ".csv";
+
+    auto icconfigdir_result = std::getenv("IC_OUTPUT_DIR");
+    if (icconfigdir_result) {
+      file_path = icconfigdir_result;
+    }
+    if (!std::filesystem::exists(file_path)) {
+      if (!std::filesystem::create_directories(file_path)) {
+        errs() << "Could not create parent directories of path " << file_path
+               << "\n";
+        return false;
+      };
+    }
+    file_path /= output_filename;
+
+    errs() << file_path << "\n";
+
+    csv_file.open(file_path);
     if (!csv_file.is_open()) {
-      errs() << "Error while trying to open output file " << os.str() << "\n";
+      errs() << "Error while trying to open output file at " << file_path
+             << "\n";
       return false;
     }
-
-    // std::string tmp_str;
-    // raw_string_ostream tmp(tmp_str);
-    // tmp << M;
-    // csv_file << tmp.str();
 
     csv_file << output_str << "\n";
     csv_file.close();
