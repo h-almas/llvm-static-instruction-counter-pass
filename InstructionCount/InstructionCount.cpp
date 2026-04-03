@@ -239,7 +239,10 @@ struct ICFunctionAnalysis : public AnalysisInfoMixin<ICFunctionAnalysis> {
           }
 
           if (!called_F)
-            continue;                        // in case it's null
+            continue; // in case it's null
+          if (called_F->isDeclaration()) {
+            continue; // if it's a declaration, skip
+          }
           if (called_F == result.function) { // if it's a recursion
             result.recursion_expr =
                 add({result.recursion_expr,
