@@ -310,7 +310,7 @@ ExprHandle reduce(const ExprHandle expr) {
       return std::make_shared<Expr>(m);
     }
   };
-  return std::visit(Reducer{}, *expr);
+  return std::visit(Reducer{}, *cloneExpression(expr));
 }
 
 ExprHandle substituteRecursionVariables(const ExprHandle expr) {
