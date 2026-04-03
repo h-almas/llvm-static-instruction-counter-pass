@@ -267,7 +267,7 @@ struct ICAggregationFunctionAnalysis
   using Result = ICFunctionAnalysis::Result;
 
   ICFunctionAnalysis::Result
-  getECFunctionAnalysisResult(Function *F, FunctionAnalysisManager &FAM) {
+  getICFunctionAnalysisResult(Function *F, FunctionAnalysisManager &FAM) {
     ICFunctionAnalysis::Result *result_ptr =
         FAM.getCachedResult<ICFunctionAnalysis>(*F);
     if (!result_ptr) {
@@ -314,32 +314,15 @@ struct ICAggregationFunctionAnalysis
           prev_result.instruction_costs[k] = expr;
         }
       }
-      // if (config.verbose)
-      //   errs() << "For inst: " << k << " and its expr: " << v
-      //          << " from previous function\n";
-      // if (prev_result.instruction_costs.count(k)) {
-      //   if (config.verbose)
-      //     errs() << "Was already in this functions result with value: "
-      //            << prev_result.instruction_costs[k] << ". Modifying it.\n";
-      //   prev_result.instruction_costs[k] =
-      //       add({prev_result.instruction_costs[k],
-      //            mul({called_result.recursion_expr, call_expr, v})});
-      // } else {
-      //   if (config.verbose)
-      //     errs() << "Was not yet in this functions result. Adding it.\n";
-      //   prev_result.instruction_costs[k] =
-      //       mul({called_result.recursion_expr, call_expr, v});
-      // }
     }
   }
 
   Result run(Function &F, FunctionAnalysisManager &FAM) {
     if (config.verbose)
-      errs() << "In ECAccumulationFunctionAnalysis for " << F.getName()
-             << ":\n";
-    Result prev_result = getECFunctionAnalysisResult(&F, FAM);
+      errs() << "In ICAggregationFunctionAnalysis for " << F.getName() << ":\n";
+    Result prev_result = getICFunctionAnalysisResult(&F, FAM);
 
-    for (auto &[called_F, _] : prev_result.outgoing_calls_costs) {
+    for (auto &[called_F, call_expr] : prev_result.outgoing_calls_costs) {
       if (config.verbose)
         errs() << "For call to function " << called_F->getName() << ":\n";
       if (config.verbose)
@@ -348,8 +331,7 @@ struct ICAggregationFunctionAnalysis
           FAM.getResult<ICAggregationFunctionAnalysis>(*called_F);
       if (config.verbose)
         errs() << "Got result of " << called_F->getName() << "\n";
-      doAggregation(prev_result, called_F_result,
-                    prev_result.outgoing_calls_costs[called_F]);
+      doAggregation(prev_result, called_F_result, call_expr);
     }
 
     return prev_result;
@@ -364,22 +346,21 @@ struct ICModuleAnalysis : public AnalysisInfoMixin<ICModuleAnalysis> {
 
   Result run(Module &M, ModuleAnalysisManager &MAM) {
 
-    // follow the calls and add
     Result result;
     FunctionAnalysisManager &FAM =
         MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
 
     for (auto &F : M) {
+      if (config.verbose) {
+        errs() << "Running ICAggregationFunctionAnalysis for " << F.getName()
+               << "\n";
+      }
       result.function_results[&F] = FAM.getResult<ICFunctionAnalysis>(F);
     }
 
-    // ideally I should be building a call graph
-    // Then removing all cycles by grouping them as special nodes
-    // And then I can run my analysis on those graph nodes
-
     for (auto &F : M) {
       if (config.verbose) {
-        errs() << "Running ECAccumulationFunctionAnalysis for " << F.getName()
+        errs() << "Running ICAggregationFunctionAnalysis for " << F.getName()
                << "\n";
       }
       result.function_results[&F] =
@@ -396,15 +377,6 @@ AnalysisKey ICAggregationFunctionAnalysis::Key;
 AnalysisKey ICModuleAnalysis::Key;
 
 struct InstructionCount : PassInfoMixin<InstructionCount> {
-
-  PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
-    // getInstructionCounts(F);
-
-    // errs() << "-- Function Pass!" << "\n";
-    // errs() << "This pass currently does nothing" << "\n";
-    return PreservedAnalyses::all();
-  }
-
   bool loadConfig() {
     if (!config.loaded) {
 
@@ -572,36 +544,7 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     }
   }
 
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
-    // read config
-    if (!loadConfig()) {
-      return PreservedAnalyses::all();
-    }
-
-    // run tests
-    if (config.run_tests) {
-      tests();
-      exit(0);
-    }
-
-    auto &triple = M.getTargetTriple();
-    if (!config.isTargetValid(triple)) {
-      if (config.verbose)
-        errs() << "Skipping non-device module\n";
-      return PreservedAnalyses::all();
-    }
-    if (config.verbose) {
-      errs() << "Analysing a Module with Target Triple: " << triple.getTriple()
-             << "\n";
-    }
-
-    if (config.verbose)
-      errs() << "Running analysis for Module " << M.getName() << "\n";
-
-    for (auto &F : M) {
-      function_variable_ids[&F] = Variable::latest_id["f"]++;
-    }
-
+  bool outputToCsv(Module &M, ICModuleAnalysis::Result &MR) {
     std::string output_str{};
     raw_string_ostream ostream{output_str};
 
@@ -610,8 +553,6 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       ostream << "," << inst;
     }
     ostream << "\n";
-
-    auto MR = MAM.getResult<ICModuleAnalysis>(M);
 
     for (auto &[F, FR] : MR.function_results) {
       auto &costs = FR.instruction_costs;
@@ -653,33 +594,78 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
 
     std::ofstream csv_file{};
 
-    // errs() << "opening file\n";
-
     std::string output_content;
     raw_string_ostream os(output_content);
     os << M.getName() << "-" << M.getTargetTriple().getTriple() << ".csv";
     csv_file.open(os.str());
+    if (!csv_file.is_open()) {
+      errs() << "Error while trying to open output file " << os.str() << "\n";
+      return false;
+    }
+
+    // std::string tmp_str;
+    // raw_string_ostream tmp(tmp_str);
+    // tmp << M;
+    // csv_file << tmp.str();
 
     csv_file << output_str << "\n";
     csv_file.close();
-    // errs() << "closed file\n";
+    return true;
+  }
+
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
+    // read config
+    if (!loadConfig()) {
+      return PreservedAnalyses::all();
+    }
+
+    // run tests
+    if (config.run_tests) {
+      tests();
+      exit(0);
+    }
+
+    auto &triple = M.getTargetTriple();
+    if (!config.isTargetValid(triple)) {
+      if (config.verbose)
+        errs() << "Skipping non-device module\n";
+      return PreservedAnalyses::all();
+    }
+    if (config.verbose) {
+      errs() << "Analysing a Module with Target Triple: " << triple.getTriple()
+             << "\n";
+    }
+
+    if (config.verbose)
+      errs() << "Running analysis for Module " << M.getName() << "\n";
+
+    for (auto &F : M) {
+      function_variable_ids[&F] = Variable::latest_id["f"]++;
+    }
+
+    auto MR = MAM.getResult<ICModuleAnalysis>(M);
+
+    if (!outputToCsv(M, MR)) {
+      return PreservedAnalyses::all();
+    }
 
     return PreservedAnalyses::all();
   }
 
-  static bool isRequired() { return true; }
+  // static bool isRequired() { return true; }
 };
 
-void registerPassBuilderCallbacks(PassBuilder &PB) {
-  PB.registerAnalysisRegistrationCallback([](FunctionAnalysisManager &FAM) {
-    FAM.registerPass([&] { return ICFunctionAnalysis(); });
-    FAM.registerPass([&] { return ICAggregationFunctionAnalysis(); });
-  });
-  PB.registerAnalysisRegistrationCallback([](ModuleAnalysisManager &MAM) {
+void registerPassBuilderCallbacks(llvm::PassBuilder &PB) {
+  PB.registerAnalysisRegistrationCallback(
+      [](llvm::FunctionAnalysisManager &FAM) {
+        FAM.registerPass([&] { return ICFunctionAnalysis(); });
+        FAM.registerPass([&] { return ICAggregationFunctionAnalysis(); });
+      });
+  PB.registerAnalysisRegistrationCallback([](llvm::ModuleAnalysisManager &MAM) {
     MAM.registerPass([&] { return ICModuleAnalysis(); });
   });
   PB.registerPipelineParsingCallback(
-      [](StringRef Name, llvm::ModulePassManager &MPM,
+      [](llvm::StringRef Name, llvm::ModulePassManager &MPM,
          ArrayRef<llvm::PassBuilder::PipelineElement>) {
         if (Name == "instruction-count") {
           MPM.addPass(InstructionCount());
@@ -687,14 +673,15 @@ void registerPassBuilderCallbacks(PassBuilder &PB) {
         }
         return false;
       });
-  PB.registerOptimizerLastEPCallback([](ModulePassManager &MPM,
-                                        OptimizationLevel Level,
-                                        ThinOrFullLTOPhase TOF) {
+  PB.registerOptimizerLastEPCallback([](llvm::ModulePassManager &MPM,
+                                        llvm::OptimizationLevel Level,
+                                        llvm::ThinOrFullLTOPhase TOF) {
     // FunctionPassManager FPM;
     // FPM.addPass(InstructionCount());
 
-    if (TOF == ThinOrFullLTOPhase::None ||
-        TOF == ThinOrFullLTOPhase::FullLTOPostLink) {
+    if (TOF == llvm::ThinOrFullLTOPhase::None ||
+        TOF == llvm::ThinOrFullLTOPhase::ThinLTOPostLink ||
+        TOF == llvm::ThinOrFullLTOPhase::FullLTOPostLink) {
       MPM.addPass(InstructionCount());
     }
   });
