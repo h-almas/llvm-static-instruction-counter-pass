@@ -327,6 +327,8 @@ struct ICAggregationFunctionAnalysis
         } else if (config.aggregate_level == Config::Constants) {
           if (Constant *c = std::get_if<Constant>(v.get())) {
             expr_actual = std::make_shared<Expr>(*c);
+          } else {
+            expr_actual = var(id, 1, 1, "f");
           }
         }
 
@@ -387,8 +389,7 @@ struct ICModuleAnalysis : public AnalysisInfoMixin<ICModuleAnalysis> {
 
     for (auto F : functions_sorted) {
       if (config.verbose) {
-        errs() << "Running ICAggregationFunctionAnalysis for " << F->getName()
-               << "\n";
+        errs() << "Running ICFunctionAnalysis for " << F->getName() << "\n";
       }
       result.function_results[F] = FAM.getResult<ICFunctionAnalysis>(*F);
     }
