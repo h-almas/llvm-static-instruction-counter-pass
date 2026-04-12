@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Expression.hpp"
+#include <filesystem>
 #include <llvm/IR/Analysis.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/PassManager.h>
@@ -29,12 +30,13 @@ struct Config {
 
   std::vector<std::string> instructions_to_count;
   std::vector<std::string> targets;
-  std::string energy_model_name;
+  std::vector<std::string> energy_model_names;
   AggregationLevel aggregate_level;
   bool verbose = false;
   bool run_tests = false;
   bool loaded = false;
-  std::map<std::string, std::size_t> energy_model{};
+  using EnergyModel = std::map<std::string, std::size_t>;
+  std::map<std::string, EnergyModel> energy_model{};
 
   bool isTargetValid(const Triple &target);
   bool invalidate(Module &M, const PreservedAnalyses &PA,
@@ -45,6 +47,8 @@ struct ICConfigReader : public AnalysisInfoMixin<ICConfigReader> {
   using Result = Config;
 
   void loadConfig(Config &config);
+  void loadEnergyModel(Config &config, std::filesystem::path base_directory,
+                       std::string energy_model_name);
 
   Result run(Module &M, ModuleAnalysisManager &MAM);
   static AnalysisKey Key;
@@ -53,6 +57,7 @@ struct ICConfigReader : public AnalysisInfoMixin<ICConfigReader> {
 struct ICFunctionAnalysis : public AnalysisInfoMixin<ICFunctionAnalysis> {
   struct Result {
     Function *function;
+    std::size_t fid;
     std::map<std::string, ExprHandle> instruction_costs{};
     std::map<Function *, ExprHandle>
         outgoing_calls_costs{}; // counts as both calls and invokes

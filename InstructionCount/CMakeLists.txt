@@ -38,7 +38,7 @@ endif()
 #===============================================================================
 # 3. ADD THE TARGET
 #===============================================================================
-add_library(InstructionCount SHARED InstructionCount.cpp Expression.cpp)
+add_library(InstructionCount SHARED InstructionCount.cpp ICAnalyses.cpp Expression.cpp)
 
 # Allow undefined symbols in shared objects on Darwin (this is the default
 # behaviour on Linux)
