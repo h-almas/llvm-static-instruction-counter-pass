@@ -4,7 +4,7 @@ It is meant to be used with the AdaptiveCpp's acpp compiler, compiled against LL
 
 ## How to build
 
-In order to build all passes run `cmake -B build -DLLVM_INSTALL_DIR=<llvm-directory>` and then `cmake --build build`. This project is meant to be used with LLVM version 21.
+In order to build all passes run `cmake -B build -DLLVM_INSTALL_DIR=<llvm-directory>` and then `cmake --build build` in the git repository's root. This project is meant to be used with LLVM version 21.
 ## How to use
 
 To run the pass plugin on an example.ll file with opt:
