@@ -1,5 +1,17 @@
-instructions_to_count: [alloca, load, store, fmul, fadd, mul, add]
-energy_model_name: all_ones
-targets_allowed: [nvptx, amdgpu, x86]
+instructions_to_count:
+# - mul
+# - div
+# - add
+# - sub
+- fmul
+- fdiv
+- fadd
+- fsub
+- llvm.nvvm.fma.rn.d
+- llvm.nvvm.mul.rn.d
+- llvm.nvvm.sqrt.rn.d
+energy_model_names: [all_ones]
+targets_allowed: [gpu]
+aggregation_level: fid
 verbose: false
 run_tests: false

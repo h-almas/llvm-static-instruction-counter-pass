@@ -1,7 +1,20 @@
-alloca:1
-load:1
+alloca: 1
+load: 1
 store: 1
-mul:1
-fmul:1
+mul: 1
+div: 1
 add: 1
+sub: 1
+fmul: 1
+fdiv: 1
 fadd: 1
+fsub: 1
+llvm.nvvm.fma.rn.d: 1
+llvm.nvvm.mul.rn.d: 1
+llvm.nvvm.fma.rn.f: 1
+llvm.nvvm.mul.rn.f: 1
+llvm.nvvm.sqrt.rn.ftz.f: 1
+llvm.nvvm.sqrt.approx.ftz.f: 1
+llvm.nvvm.sqrt.rn.f: 1
+llvm.nvvm.sqrt.approx.f: 1
+llvm.nvvm.sqrt.rn.d: 1
