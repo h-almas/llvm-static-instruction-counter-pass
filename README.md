@@ -10,7 +10,7 @@ In order to build all passes run `cmake -B build -DLLVM_INSTALL_DIR=<llvm-direct
 To run the pass plugin on an example.ll file with opt:
 
 ```bash
-opt -load-pass-plugin=<path-to-pass-plugin.so> -passes='pass1;pass2' -disable-output example.ll
+opt -load-pass-plugin=<path-to-pass-plugin.so> -passes='instruction-count' -disable-output example.ll
 ```
 
 To run the pass directly with acpp, make sure to explicitly specify the targets in the following way or through the environment variable:
