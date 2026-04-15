@@ -1,27 +1,52 @@
-# llvm-passes
+# LLVM Static Instruction Counter Pass
+This is a static analysis pass for LLVM Intermediate Representation (IR), which can estimate the instruction counts of an IR program.
+It is meant to be used with the AdaptiveCpp's acpp compiler, compiled against LLVM version 21. 
 
 ## How to build
 
-In order to build all passes run `cmake -B build -DLLVM_INSTALL_DIR=<llvm-directory>` and then `cmake --build build`. This project is meant to be used with LLVM version 21. If there are compile errors, it could be that you need to add `-DLLVM_DIR=<llvm-cmake-directory>` to directly specify the LLVM directory that contains the LLVM CMake file. You should be able to find this at `<llvm-directory>/lib/cmake`. The reason this might be necessary is that CMake can sometimes find a file from e.g. rocm's LLVM version.
-
+In order to build all passes run `cmake -B build -DLLVM_INSTALL_DIR=<llvm-directory>` and then `cmake --build build`. This project is meant to be used with LLVM version 21.
 ## How to use
 
-To run a passes from a pass plugin on an example.ll file:
+To run the pass plugin on an example.ll file with opt:
 
 ```bash
 opt -load-pass-plugin=<path-to-pass-plugin.so> -passes='pass1;pass2' -disable-output example.ll
 ```
 
-To run a pass directly with clang:
+To run the pass directly with acpp, make sure to explicitly specify the targets in the following way or through the environment variable:
 
 ```bash
-clang++ -fpass-plugin=<path-to-pass-plugin.so> -Xclang -disable-O0-optnone example.cpp
+acpp -fpass-plugin=<path-to-pass-plugin.so> example.cpp --acpp-targets="<targets>"
 ```
 
-## Pass Plugins
+## Configuration Options
+The pass expects a config.yaml file and an energy_models/ directory, like the ones in the examples/ directory.
+You can specifiy the directory of the config and energy_models directory, by setting the IC_CONFIG_DIR environment variable. You can also specify an output directory with IC_OUTPUT_DIR for the output results.
+Make sure to use absolute paths. If you are in the root of the git repo, set them the environment variables in the following way:
+```bash
+export IC_CONFIG_DIR=$(pwd)/examples
+export IC_OUTPUT_DIR=$(pwd)/examples/output
+```
+The config.yaml file in the examples/ directory can have the following options
 
-- InstructionCount: This plugin has an 'instruction-count' pass which currently outputs the count of each instruction per llvm function. The output is a .csv file, per Module, named after the Module's source file and target-triple. The pass can be configured with a 'config.yaml' and can choose an energy model from and 'energy_models' directory. Configuration options of the 'config.yaml' file are:
-  - instructions_to_count (takes a sequence of instruction names)
-  - energy_model_name (takes a file name of a file in the 'energy_models' directory)
-  - verbose (takes a bool value)
-  - run_tests (takes a bool value and runs tests for the Expression code)
+- instructions_to_count: Takes a list of instruction names that are to be considered when running
+the pass and which will be visible in the output file. This way users can choose which instructions
+they are interested in analyzing or don’t want to see in the output file. We also allow specifying
+symbol/function names, which the analysis pass counts as "special instructions". This way users
+can also analyze for the usage of LLVM intrinsic functions.
+- energy_model_names: This option takes a list of names of energy model files under the energy_models
+/ directory. This allows the user to choose multiple different energy_models and the pass will create
+a separate output file for each specified energy model.
+- targets_allowed: Takes a list of targets that are checked during Target-Filtering. Currently available
+options are GPU, NVPTX, AMDGPU, SPIR-V, SPIR, DXIL, CPU, RISCV, RISCV32, RISCV64, ARM,
+x86. Options such as GPU, CPU, RISCV encompass more than one target architecture.
+- aggregation_level: Can be set to either of the three different values fid, constants and all. It
+controls the degree of aggregation in the Count Aggregation Function Analysis. Setting it
+to fid, will mean every called function will be referenced with an id, such as f0 for the function with
+id 0, in the resulting output files of the pass. Setting it to constants will only aggregate a called
+function’s counts, when they are a constant, such as 3, while more complex instruction count’s, such
+as 2n0, will be referred to by a function id, like with the fid option. Setting the option to all means
+all called function’s instruction counts will be aggregated and no fid’s will be used. It is set to fid,
+by default.
+- verbose: If set to true, outputs additional debugging information. It is set to false, by default.
+- run_tests: Used for internal tests of the Expression.cpp and Expression.hpp files 
