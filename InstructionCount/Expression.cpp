@@ -182,13 +182,13 @@ ExprHandle reduce(const ExprHandle expr) {
     }
 
     ExprHandle operator()(Multiplication &m) const {
+      for (auto &term : m.terms) {
+        term = reduce(term);
+      }
       if (m.terms.size() == 0)
         return constant(0);
       if (m.terms.size() == 1) {
         return m.terms[0];
-      }
-      for (auto &term : m.terms) {
-        term = reduce(term);
       }
 
       // partition the vector into non-multiplications and multiplications
