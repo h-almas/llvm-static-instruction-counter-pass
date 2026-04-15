@@ -190,11 +190,11 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
       return false;
     }
 
-    std::string str;
-    raw_string_ostream stros{str};
-    stros << M;
-
-    csv_file << str << "\n";
+    // std::string str;
+    // raw_string_ostream stros{str};
+    // stros << M;
+    //
+    // csv_file << str << "\n";
 
     csv_file << output_str;
     csv_file.close();
