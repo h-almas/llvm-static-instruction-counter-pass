@@ -43,7 +43,7 @@ struct Config {
                   ModuleAnalysisManager::Invalidator &Invalidator);
 };
 
-struct ICConfigReader : public AnalysisInfoMixin<ICConfigReader> {
+struct ConfigReader : public AnalysisInfoMixin<ConfigReader> {
   using Result = Config;
 
   void loadConfig(Config &config);
@@ -54,7 +54,8 @@ struct ICConfigReader : public AnalysisInfoMixin<ICConfigReader> {
   static AnalysisKey Key;
 };
 
-struct ICFunctionAnalysis : public AnalysisInfoMixin<ICFunctionAnalysis> {
+struct CounterFunctionAnalysis
+    : public AnalysisInfoMixin<CounterFunctionAnalysis> {
   struct Result {
     Function *function;
     std::size_t fid;
@@ -86,11 +87,11 @@ struct ICFunctionAnalysis : public AnalysisInfoMixin<ICFunctionAnalysis> {
                          BlockToLoops &BlTL, Config &config);
 };
 
-struct ICAggregationFunctionAnalysis
-    : public AnalysisInfoMixin<ICAggregationFunctionAnalysis> {
-  using Result = ICFunctionAnalysis::Result;
+struct CountAggregationFunctionAnalysis
+    : public AnalysisInfoMixin<CountAggregationFunctionAnalysis> {
+  using Result = CounterFunctionAnalysis::Result;
 
-  ICFunctionAnalysis::Result
+  CounterFunctionAnalysis::Result
   getICFunctionAnalysisResult(Function *F, FunctionAnalysisManager &FAM);
 
   void doAggregation(Result &prev_result, Result &called_result,
@@ -100,9 +101,10 @@ struct ICAggregationFunctionAnalysis
   static AnalysisKey Key;
 };
 
-struct ICModuleAnalysis : public AnalysisInfoMixin<ICModuleAnalysis> {
+struct CounterModuleAnalysis : public AnalysisInfoMixin<CounterModuleAnalysis> {
   struct Result {
-    std::map<Function *, ICFunctionAnalysis::Result, FunctionPointerComparator>
+    std::map<Function *, CounterFunctionAnalysis::Result,
+             FunctionPointerComparator>
         function_results{};
   };
 
@@ -112,7 +114,7 @@ struct ICModuleAnalysis : public AnalysisInfoMixin<ICModuleAnalysis> {
 
 } // namespace IC
 
-template <> struct llvm::yaml::MappingTraits<IC::Config> {
+template <> struct yaml::MappingTraits<IC::Config> {
   static void mapping(IO &io, IC::Config &config);
 };
 

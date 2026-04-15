@@ -34,11 +34,11 @@ Multiplication::Multiplication(const Multiplication &multiplication)
 
 ExprHandle reduce(const ExprHandle expr) {
   struct Reducer {
-    ExprHandle operator()(const Constant &c) const {
+    ExprHandle operator()(Constant &c) const {
       return std::make_shared<Expr>(c);
     }
 
-    ExprHandle operator()(const Variable &v) const {
+    ExprHandle operator()(Variable &v) const {
       if (v.factor == 0) {
         return constant(0);
       } else if (v.exponent == 0) {
@@ -182,6 +182,8 @@ ExprHandle reduce(const ExprHandle expr) {
     }
 
     ExprHandle operator()(Multiplication &m) const {
+      if (m.terms.size() == 0)
+        return constant(0);
       if (m.terms.size() == 1) {
         return m.terms[0];
       }
@@ -353,14 +355,14 @@ ExprHandle cloneExpression(const ExprHandle expr) {
     ExprHandle operator()(const Addition &a) const {
       Addition a_new = Addition(a);
       for (auto &term : a_new.terms) {
-        term = substituteRecursionVariables(term);
+        term = cloneExpression(term);
       }
       return std::make_shared<Expr>(a_new);
     }
     ExprHandle operator()(const Multiplication &m) const {
       Multiplication m_new = Multiplication(m);
       for (auto &term : m_new.terms) {
-        term = substituteRecursionVariables(term);
+        term = cloneExpression(term);
       }
       return std::make_shared<Expr>(m_new);
     }

@@ -20,11 +20,6 @@ using namespace llvm;
 
 namespace IC {
 
-struct Variable;
-struct Constant;
-struct Addition;
-struct Multiplication;
-
 struct Expr;
 using ExprHandle = std::shared_ptr<Expr>;
 

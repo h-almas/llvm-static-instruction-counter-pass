@@ -6,9 +6,8 @@
 
 using llvm::yaml::IO;
 
-void llvm::yaml::MappingTraits<IC::Config>::mapping(IO &io,
-                                                    IC::Config &config) {
-  io.mapRequired("energy_model_name", config.energy_model_names);
+void yaml::MappingTraits<IC::Config>::mapping(IO &io, IC::Config &config) {
+  io.mapRequired("energy_model_names", config.energy_model_names);
   io.mapRequired("instructions_to_count", config.instructions_to_count);
   io.mapRequired("targets_allowed", config.targets);
   io.mapOptional("aggregation_level", config.aggregate_level, IC::Config::FID);
@@ -16,8 +15,8 @@ void llvm::yaml::MappingTraits<IC::Config>::mapping(IO &io,
   io.mapOptional("run_tests", config.run_tests, false);
 }
 
-void llvm::yaml::ScalarEnumerationTraits<IC::Config::AggregationLevel>::
-    enumeration(IO &io, IC::Config::AggregationLevel &value) {
+void yaml::ScalarEnumerationTraits<IC::Config::AggregationLevel>::enumeration(
+    IO &io, IC::Config::AggregationLevel &value) {
   io.enumCase(value, "fid", IC::Config::FID);
   io.enumCase(value, "constants", IC::Config::Constants);
   io.enumCase(value, "all", IC::Config::All);
@@ -25,10 +24,10 @@ void llvm::yaml::ScalarEnumerationTraits<IC::Config::AggregationLevel>::
 
 namespace IC {
 
-AnalysisKey ICFunctionAnalysis::Key;
-AnalysisKey ICAggregationFunctionAnalysis::Key;
-AnalysisKey ICModuleAnalysis::Key;
-AnalysisKey ICConfigReader::Key;
+AnalysisKey CounterFunctionAnalysis::Key;
+AnalysisKey CountAggregationFunctionAnalysis::Key;
+AnalysisKey CounterModuleAnalysis::Key;
+AnalysisKey ConfigReader::Key;
 
 bool Config::isTargetValid(const Triple &target) {
   for (auto &t : targets) {
@@ -77,12 +76,12 @@ bool Config::isTargetValid(const Triple &target) {
 
 bool Config::invalidate(Module &M, const PreservedAnalyses &PA,
                         ModuleAnalysisManager::Invalidator &Invalidator) {
-  auto PAC = PA.getChecker(&ICConfigReader::Key);
+  auto PAC = PA.getChecker(&ConfigReader::Key);
   return !PAC.preservedWhenStateless();
 }
-void ICConfigReader::loadEnergyModel(Config &config,
-                                     std::filesystem::path base_directory,
-                                     std::string energy_model_name) {
+void ConfigReader::loadEnergyModel(Config &config,
+                                   std::filesystem::path base_directory,
+                                   std::string energy_model_name) {
   std::ifstream energy_model_file;
   std::filesystem::path energy_model_dir_path =
       base_directory / "energy_models";
@@ -123,7 +122,7 @@ void ICConfigReader::loadEnergyModel(Config &config,
                                        energy_usage)) {
       errs() << "Error while parsing line: \"" << line << "\" in "
              << energy_model_file_path << "\n";
-      return;
+      continue;
     };
 
     // std::size_t energy_usage = (energy_usage_str);
@@ -135,7 +134,7 @@ void ICConfigReader::loadEnergyModel(Config &config,
   }
 }
 
-void ICConfigReader::loadConfig(Config &config) {
+void ConfigReader::loadConfig(Config &config) {
   std::filesystem::path base_directory{"."};
   auto icconfig_result = std::getenv("IC_CONFIG_DIR");
   if (icconfig_result) {
@@ -165,8 +164,7 @@ void ICConfigReader::loadConfig(Config &config) {
   config.loaded = true;
 }
 
-ICConfigReader::Result ICConfigReader::run(Module &M,
-                                           ModuleAnalysisManager &MAM) {
+ConfigReader::Result ConfigReader::run(Module &M, ModuleAnalysisManager &MAM) {
   Config config;
   loadConfig(config);
   return config;
@@ -174,9 +172,9 @@ ICConfigReader::Result ICConfigReader::run(Module &M,
 
 // std::map<Function *, std::size_t> function_variable_ids{};
 
-ICFunctionAnalysis::Result
-ICFunctionAnalysis::run(Function &F, FunctionAnalysisManager &FAM) {
-  ICFunctionAnalysis::Result result;
+CounterFunctionAnalysis::Result
+CounterFunctionAnalysis::run(Function &F, FunctionAnalysisManager &FAM) {
+  CounterFunctionAnalysis::Result result;
   result.function = &F;
   if (F.isDeclaration())
     return result;
@@ -184,13 +182,13 @@ ICFunctionAnalysis::run(Function &F, FunctionAnalysisManager &FAM) {
 
   auto &MAMProxy = FAM.getResult<ModuleAnalysisManagerFunctionProxy>(F);
   Module &M = *F.getParent();
-  auto &config = *MAMProxy.getCachedResult<ICConfigReader>(M);
+  auto &config = *MAMProxy.getCachedResult<ConfigReader>(M);
 
   if (config.verbose)
     errs() << "Counting function " << demangle(F.getName()) << "\n";
 
-  ICFunctionAnalysis::BlockToLoops BlTL{};
-  ICFunctionAnalysis::BoundsToLoops BoTL{};
+  CounterFunctionAnalysis::BlockToLoops BlTL{};
+  CounterFunctionAnalysis::BoundsToLoops BoTL{};
   std::vector<Loop *> unbounded_loops{};
 
   std::map<Loop *, ExprHandle> loop_exprs{};
@@ -210,7 +208,7 @@ ICFunctionAnalysis::run(Function &F, FunctionAnalysisManager &FAM) {
   return result;
 }
 
-void ICFunctionAnalysis::createExpressionsForLoops(
+void CounterFunctionAnalysis::createExpressionsForLoops(
     const BoundsToLoops &BoTL, const std::vector<Loop *> &unbounded_loops,
     std::map<Loop *, ExprHandle> &loop_exprs, Config &config) {
   if (config.verbose)
@@ -231,7 +229,7 @@ void ICFunctionAnalysis::createExpressionsForLoops(
   }
 }
 
-void ICFunctionAnalysis::assignLoopsToLoopBounds(
+void CounterFunctionAnalysis::assignLoopsToLoopBounds(
     BoundsToLoops &BTL, std::vector<Loop *> &unbounded_loops, Loop *loop,
     ScalarEvolution &SE) {
   for (Loop *l_inner : *loop) {
@@ -253,8 +251,8 @@ void ICFunctionAnalysis::assignLoopsToLoopBounds(
   }
 }
 
-void ICFunctionAnalysis::assignLoopsToBasicBlocks(BlockToLoops &BTL,
-                                                  Loop *loop) {
+void CounterFunctionAnalysis::assignLoopsToBasicBlocks(BlockToLoops &BTL,
+                                                       Loop *loop) {
   for (Loop *l_inner : *loop) {
     assignLoopsToBasicBlocks(BTL, l_inner);
   }
@@ -263,7 +261,7 @@ void ICFunctionAnalysis::assignLoopsToBasicBlocks(BlockToLoops &BTL,
   }
 }
 
-void ICFunctionAnalysis::countInstructions(
+void CounterFunctionAnalysis::countInstructions(
     Result &result, std::map<Loop *, ExprHandle> &loop_exprs,
     BlockToLoops &BlTL, Config &config) {
 
@@ -343,60 +341,60 @@ void ICFunctionAnalysis::countInstructions(
   }
 }
 
-ICAggregationFunctionAnalysis::Result
-ICAggregationFunctionAnalysis::getICFunctionAnalysisResult(
+CountAggregationFunctionAnalysis::Result
+CountAggregationFunctionAnalysis::getICFunctionAnalysisResult(
     Function *F, FunctionAnalysisManager &FAM) {
-  ICFunctionAnalysis::Result *result_ptr =
-      FAM.getCachedResult<ICFunctionAnalysis>(*F);
+  CounterFunctionAnalysis::Result *result_ptr =
+      FAM.getCachedResult<CounterFunctionAnalysis>(*F);
   if (!result_ptr) {
     errs() << "There was no cached result for Function: " << F->getName()
            << "!\n";
-    return ICFunctionAnalysis::Result();
+    return CounterFunctionAnalysis::Result();
   }
   return *result_ptr;
 }
 
-void ICAggregationFunctionAnalysis::doAggregation(Result &prev_result,
-                                                  Result &called_result,
-                                                  ExprHandle call_expr,
-                                                  Config &config) {
+void CountAggregationFunctionAnalysis::doAggregation(Result &prev_result,
+                                                     Result &called_result,
+                                                     ExprHandle call_expr,
+                                                     Config &config) {
   for (auto &[k, v] : called_result.instruction_costs) {
     if (Constant *c = std::get_if<Constant>(v.get())) {
       if (c->value == 0) {
         continue;
       }
-    } else {
-      ExprHandle expr_base =
-          mul({substituteRecursionVariables(called_result.recursion_expr),
-               call_expr});
-      ExprHandle expr_actual = v;
-      if (config.aggregate_level == Config::FID) {
-        expr_actual = var(called_result.fid, 1, 1, "f");
-      } else if (config.aggregate_level == Config::Constants) {
-        if (Constant *c = std::get_if<Constant>(v.get())) {
-          expr_actual = std::make_shared<Expr>(*c);
-        } else {
-          expr_actual = var(called_result.fid, 1, 1, "f");
-        }
-      }
-
-      ExprHandle expr = mul({expr_base, expr_actual});
-
-      if (prev_result.instruction_costs.count(k)) {
-        prev_result.instruction_costs[k] =
-            add({prev_result.instruction_costs[k], expr});
+    }
+    ExprHandle expr_base =
+        mul({substituteRecursionVariables(called_result.recursion_expr),
+             call_expr});
+    ExprHandle expr_actual = v;
+    if (config.aggregate_level == Config::FID) {
+      expr_actual = var(called_result.fid, 1, 1, "f");
+    } else if (config.aggregate_level == Config::Constants) {
+      if (Constant *c = std::get_if<Constant>(v.get())) {
+        expr_actual = std::make_shared<Expr>(*c);
       } else {
-        prev_result.instruction_costs[k] = expr;
+        expr_actual = var(called_result.fid, 1, 1, "f");
       }
+    }
+
+    ExprHandle expr = mul({expr_base, expr_actual});
+
+    if (prev_result.instruction_costs.count(k)) {
+      prev_result.instruction_costs[k] =
+          add({prev_result.instruction_costs[k], expr});
+    } else {
+      prev_result.instruction_costs[k] = expr;
     }
   }
 }
 
-ICAggregationFunctionAnalysis::Result
-ICAggregationFunctionAnalysis::run(Function &F, FunctionAnalysisManager &FAM) {
+CountAggregationFunctionAnalysis::Result
+CountAggregationFunctionAnalysis::run(Function &F,
+                                      FunctionAnalysisManager &FAM) {
   auto &MAMProxy = FAM.getResult<ModuleAnalysisManagerFunctionProxy>(F);
   Module &M = *F.getParent();
-  auto &config = *MAMProxy.getCachedResult<ICConfigReader>(M);
+  auto &config = *MAMProxy.getCachedResult<ConfigReader>(M);
 
   if (config.verbose)
     errs() << "In ICAggregationFunctionAnalysis for " << F.getName() << ":\n";
@@ -408,7 +406,7 @@ ICAggregationFunctionAnalysis::run(Function &F, FunctionAnalysisManager &FAM) {
     if (config.verbose)
       errs() << "Getting result of " << called_F->getName() << "\n";
     Result called_F_result =
-        FAM.getResult<ICAggregationFunctionAnalysis>(*called_F);
+        FAM.getResult<CountAggregationFunctionAnalysis>(*called_F);
     if (config.verbose)
       errs() << "Got result of " << called_F->getName() << "\n";
     doAggregation(prev_result, called_F_result, call_expr, config);
@@ -417,9 +415,9 @@ ICAggregationFunctionAnalysis::run(Function &F, FunctionAnalysisManager &FAM) {
   return prev_result;
 }
 
-ICModuleAnalysis::Result ICModuleAnalysis::run(Module &M,
-                                               ModuleAnalysisManager &MAM) {
-  auto &config = MAM.getResult<ICConfigReader>(M);
+CounterModuleAnalysis::Result
+CounterModuleAnalysis::run(Module &M, ModuleAnalysisManager &MAM) {
+  auto &config = MAM.getResult<ConfigReader>(M);
 
   std::vector<Function *> functions_sorted;
   for (auto &F : M) {
@@ -436,7 +434,7 @@ ICModuleAnalysis::Result ICModuleAnalysis::run(Module &M,
     if (config.verbose) {
       errs() << "Running ICFunctionAnalysis for " << F->getName() << "\n";
     }
-    result.function_results[F] = FAM.getResult<ICFunctionAnalysis>(*F);
+    result.function_results[F] = FAM.getResult<CounterFunctionAnalysis>(*F);
   }
 
   for (auto F : functions_sorted) {
@@ -445,7 +443,7 @@ ICModuleAnalysis::Result ICModuleAnalysis::run(Module &M,
              << "\n";
     }
     result.function_results[F] =
-        FAM.getResult<ICAggregationFunctionAnalysis>(*F);
+        FAM.getResult<CountAggregationFunctionAnalysis>(*F);
   }
 
   return result;

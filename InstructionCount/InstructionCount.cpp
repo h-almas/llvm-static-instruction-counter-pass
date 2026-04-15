@@ -116,66 +116,56 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     }
   }
 
-  bool outputToCsv(Module &M, ICModuleAnalysis::Result &MR, Config &config,
-                   std::string energy_model_name) {
+  bool outputToCsv(Module &M, const CounterModuleAnalysis::Result &MR,
+                   Config &config, const std::string &energy_model_name) {
     std::string output_str{};
     raw_string_ostream ostream{output_str};
 
-    ostream << "Function Name,Demangled Name,fid";
+    ostream << "Function Name,Demangled Name,fid,total";
     for (auto &inst : config.instructions_to_count) {
       ostream << "," << inst;
     }
     ostream << "\n";
 
-    ICModuleAnalysis::Result MRCopy = MR;
-
-    for (auto &[F, FR] : MRCopy.function_results) {
-      auto &costs = FR.instruction_costs; // copy
-      for (auto &[inst, cost] : costs) {
-        costs[inst] =
-            mul({cost, constant(config.energy_model[energy_model_name][inst])});
+    std::map<Function *, ExprHandle> total_costs;
+    for (auto &[F, _] : MR.function_results) {
+      total_costs[F] = constant(0);
+    }
+    for (auto &[F, FR] : MR.function_results) {
+      for (auto &[_, cost] : FR.instruction_costs) {
+        total_costs[F] = add({total_costs[F], cost});
       }
     }
 
-    for (auto &[function, FR] : MRCopy.function_results) {
+    for (auto &[function, FR] : MR.function_results) {
       if (function->isDeclaration())
         continue;
 
       // Name
-      const auto name = FR.function->getName();
+      const auto name = function->getName();
       ostream << name;
-      const auto demangled_name = demangle(name);
-      // if (name != demangled_name) {
-      ostream << ",\"" << demangled_name << "\"";
+      ostream << ",\"" << demangle(name) << "\"";
       ostream << ",f" << FR.fid;
-
-      for (auto &inst : config.instructions_to_count) {
-        if (FR.instruction_costs.count(inst)) {
-          ostream << "," << FR.instruction_costs.at(inst);
-        } else {
-          ostream << ",0";
-        }
-      }
-      ostream << "\n";
+      ostream << "," << total_costs[function];
 
       for (auto &inst : config.instructions_to_count) {
         ExprHandle expr;
         if (FR.instruction_costs.count(inst)) {
-          expr = FR.instruction_costs[inst];
+          expr = mul({FR.instruction_costs.at(inst),
+                      constant(config.energy_model[energy_model_name][inst])});
         } else {
           expr = constant(0);
         }
+        ostream << "," << expr;
       }
+      ostream << "\n";
     }
-
-    std::ofstream csv_file{};
 
     std::filesystem::path file_path("./output");
 
     std::string output_filename;
     raw_string_ostream ofn(output_filename);
     std::filesystem::path source_file_path = M.getSourceFileName();
-    source_file_path.end();
     ofn << source_file_path.filename() << "-" << M.getTargetTriple().getTriple()
         << "-" << energy_model_name << ".csv";
 
@@ -192,6 +182,7 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     }
     file_path /= output_filename;
 
+    std::ofstream csv_file{};
     csv_file.open(file_path);
     if (!csv_file.is_open()) {
       errs() << "Error while trying to open output file at " << file_path
@@ -205,14 +196,14 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
 
     csv_file << str << "\n";
 
-    csv_file << output_str << "\n";
+    csv_file << output_str;
     csv_file.close();
     return true;
   }
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
     // read config
-    Config &config = MAM.getResult<ICConfigReader>(M);
+    Config &config = MAM.getResult<ConfigReader>(M);
     if (!config.loaded) {
       errs() << "Exiting Pass Early\n";
       return PreservedAnalyses::all();
@@ -242,7 +233,7 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
     //   function_variable_ids[&F] = Variable::latest_id["f"]++;
     // }
 
-    auto MR = MAM.getResult<ICModuleAnalysis>(M);
+    auto MR = MAM.getResult<CounterModuleAnalysis>(M);
 
     for (auto &[energy_model_name, _] : config.energy_model)
       if (!outputToCsv(M, MR, config, energy_model_name)) {
@@ -259,12 +250,12 @@ struct InstructionCount : PassInfoMixin<InstructionCount> {
 void registerPassBuilderCallbacks(llvm::PassBuilder &PB) {
   PB.registerAnalysisRegistrationCallback(
       [](llvm::FunctionAnalysisManager &FAM) {
-        FAM.registerPass([&] { return ICFunctionAnalysis(); });
-        FAM.registerPass([&] { return ICAggregationFunctionAnalysis(); });
+        FAM.registerPass([&] { return CounterFunctionAnalysis(); });
+        FAM.registerPass([&] { return CountAggregationFunctionAnalysis(); });
       });
   PB.registerAnalysisRegistrationCallback([](llvm::ModuleAnalysisManager &MAM) {
-    MAM.registerPass([&] { return ICModuleAnalysis(); });
-    MAM.registerPass([&] { return ICConfigReader(); });
+    MAM.registerPass([&] { return CounterModuleAnalysis(); });
+    MAM.registerPass([&] { return ConfigReader(); });
   });
   PB.registerPipelineParsingCallback(
       [](llvm::StringRef Name, llvm::ModulePassManager &MPM,
